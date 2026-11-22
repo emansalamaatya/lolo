@@ -1,0 +1,3027 @@
+
+==========================================================================================
+FILE: game-work/js/draw.js
+==========================================================================================
+
+/* ============================================================
+   draw.js — لوح الرسم الإلكتروني: ألوان، حجم فرشاة، ممحاة، تراجع، مسح، حفظ، إنهاء
+   NIG.Draw.open(title) → وعد يتحقق عند الضغط على «تم»
+   ============================================================ */
+window.NIG = window.NIG || {};
+NIG.Draw = (function () {
+  const COLORS = ['#d62828', '#ffffff', '#111111', '#1d4ed8', '#15803d', '#d99a06', '#7e22ce', '#f97316'];
+
+  function open(title) {
+    return new Promise(res => {
+      const w = document.createElement('div'); w.className = 'dr-wrap';
+      w.innerHTML = `
+        <div class="dr-top"><b>🎨 ${title || 'لوح الرسم'}</b><button class="btn primary dr-done">تم ✔</button></div>
+        <div class="dr-tools">
+          <div class="dr-colors">${COLORS.map((c, i) => `<button class="dr-c${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}" aria-label="لون"></button>`).join('')}</div>
+          <label class="dr-size">الحجم <input type="range" min="2" max="40" value="8"></label>
+          <button class="dr-b" data-a="eraser">🧽 ممحاة</button>
+          <button class="dr-b" data-a="undo">↩ تراجع</button>
+          <button class="dr-b" data-a="clear">🗑 مسح</button>
+          <button class="dr-b" data-a="save">💾 حفظ</button>
+        </div>
+        <canvas class="dr-canvas"></canvas>`;
+      document.body.appendChild(w);
+      const cv = w.querySelector('canvas'), g = cv.getContext('2d');
+      const size = w.querySelector('input'); let color = COLORS[0], erase = false, drawing = false, hist = [], last;
+      function fit() {
+        const r = cv.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+        const keep = cv.width ? g.getImageData(0, 0, cv.width, cv.height) : null;
+        cv.width = r.width * d; cv.height = r.height * d;
+        g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+        if (keep) g.putImageData(keep, 0, 0);
+        g.lineCap = g.lineJoin = 'round';
+      }
+      fit(); hist = [g.getImageData(0, 0, cv.width, cv.height)];
+      const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height]; };
+      cv.onpointerdown = e => { drawing = true; cv.setPointerCapture(e.pointerId); last = pos(e); stroke(last, last); e.preventDefault(); };
+      cv.onpointermove = e => { if (!drawing) return; const p = pos(e); stroke(last, p); last = p; };
+      const end = () => { if (!drawing) return; drawing = false; hist.push(g.getImageData(0, 0, cv.width, cv.height)); if (hist.length > 30) hist.shift(); };
+      cv.onpointerup = cv.onpointercancel = end;
+      function stroke(a, b) {
+        g.strokeStyle = erase ? '#fff' : color; g.lineWidth = size.value * (window.devicePixelRatio || 1);
+        g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0] + .01, b[1]); g.stroke();
+      }
+      w.querySelectorAll('.dr-c').forEach(b => b.onclick = () => {
+        color = b.dataset.c; erase = false;
+        w.querySelectorAll('.dr-c').forEach(x => x.classList.remove('on')); b.classList.add('on');
+        w.querySelector('[data-a=eraser]').classList.remove('on');
+      });
+      w.querySelectorAll('.dr-b').forEach(b => b.onclick = () => {
+        const a = b.dataset.a;
+        if (a === 'eraser') { erase = !erase; b.classList.toggle('on', erase); }
+        if (a === 'undo' && hist.length > 1) { hist.pop(); g.putImageData(hist[hist.length - 1], 0, 0); }
+        if (a === 'clear') { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); hist.push(g.getImageData(0, 0, cv.width, cv.height)); }
+        if (a === 'save') {
+          try {
+            const l = document.createElement('a'); l.download = 'رسمتي.png'; l.href = cv.toDataURL('image/png'); l.click();
+          } catch (e) {}
+        }
+      });
+      w.querySelector('.dr-done').onclick = () => { w.remove(); res(true); };
+    });
+  }
+  return { open };
+})();
+
+
+==========================================================================================
+FILE: game-work/js/fx.js
+==========================================================================================
+
+/* ============================================================
+   fx.js — المؤثرات: أصوات (قابلة للإغلاق)، الولد الكرتوني، الصوت، ورود الإجابة الصحيحة
+   كل الأصوات مُولَّدة بالكود (لا تحتاج ملفات ولا إنترنت)
+   ============================================================ */
+window.NIG = window.NIG || {};
+NIG.FX = (function () {
+  let ctx = null, on = true;
+  try { on = localStorage.getItem('nig_sound') !== '0'; } catch (e) {}
+
+  function ac() {
+    if (!ctx) { try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+  /* المتصفحات (خصوصًا الآيفون) تمنع الصوت حتى أول لمسة: نفتحه عند أول ضغطة */
+  function unlock() {
+    const c = ac(); if (!c) return;
+    try { const b = c.createBuffer(1, 1, 22050), s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); } catch (e) {}
+    if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
+  }
+  ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
+
+  function tone(f, t0, d, type, vol) {
+    const c = ac(); if (!c) return;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'sine'; o.frequency.value = f;
+    const t = c.currentTime + t0;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.min(1, (vol || 0.2) * 2), t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + d + 0.05);
+  }
+  /* ---------- مؤثرات صوتية: نُولّد ملف WAV بالكود ونشغّله بعنصر audio (أوثق على الهواتف) ---------- */
+  const SR = 22050;
+  // نوتة: [تردد, بداية(ث), مدة(ث), موجة, شدة]   ضجيج تصفيق: ['n', بداية, مدة, شدة]
+  const N = (f, t, d, w, v) => [f, t, d, w || 'tri', v || .5];
+  const SPEC = {
+    right: [ // فانفار حماسي + تصفيق
+      N(523, 0, .14), N(659, .12, .14), N(784, .24, .14), N(1046, .36, .45, 'sq', .45),
+      N(784, .36, .45, 'tri', .35), N(1318, .62, .5, 'tri', .5), N(1568, .8, .55, 'tri', .4),
+      ['n', .5, .9, .5]],
+    wrong: [ // «وووومب وووومب» حزين
+      N(330, 0, .3, 'saw', .5), N(311, .3, .3, 'saw', .5), N(262, .62, .6, 'saw', .55), N(131, .62, .6, 'sq', .35)],
+    dice: [N(300, 0, .06, 'sq', .3), N(390, .08, .06, 'sq', .3), N(480, .16, .06, 'sq', .3), N(600, .24, .08, 'sq', .3)],
+    step: [N(520, 0, .07, 'tri', .4)],
+    flip: [N(400, 0, .08, 'sine', .5), N(700, .07, .12, 'sine', .45)],
+    ladder: [N(400, 0, .1, 'sine', .5), N(500, .08, .1, 'sine', .5), N(650, .16, .1, 'sine', .5), N(850, .24, .25, 'sine', .5)],
+    win: [N(523, 0, .2), N(659, .18, .2), N(784, .36, .2), N(1046, .54, .3), N(784, .8, .15), N(1046, .95, .15), N(1318, 1.1, .7, 'sq', .45), ['n', .9, 1.3, .5]]
+  };
+  const wave = (w, ph) => w === 'sq' ? (Math.sin(ph) >= 0 ? 1 : -1) * .6 : w === 'saw' ? ((ph / (2 * Math.PI)) % 1) * 2 - 1 : w === 'tri' ? 2 / Math.PI * Math.asin(Math.sin(ph)) : Math.sin(ph);
+  function render(name) {
+    const spec = SPEC[name]; let len = 0;
+    spec.forEach(x => { const t = x[0] === 'n' ? x[1] + x[2] : x[1] + x[2]; len = Math.max(len, t); });
+    const n = Math.ceil((len + .1) * SR), buf = new Float32Array(n);
+    spec.forEach(x => {
+      if (x[0] === 'n') { // تصفيق: ضجيج متقطع
+        const i0 = Math.floor(x[1] * SR), i1 = Math.min(n, Math.floor((x[1] + x[2]) * SR));
+        for (let i = i0; i < i1; i++) {
+          const t = (i - i0) / SR, env = Math.min(1, t * 20) * Math.max(0, 1 - t / x[2]);
+          const clap = (Math.floor(t * 14) % 2 ? 1 : .55);
+          buf[i] += (Math.random() * 2 - 1) * x[3] * .5 * env * clap;
+        }
+        return;
+      }
+      const [f, t0, d, w, v] = x, i0 = Math.floor(t0 * SR), cnt = Math.floor(d * SR);
+      for (let k = 0; k < cnt && i0 + k < n; k++) {
+        const t = k / cnt, env = Math.min(1, k / (SR * .01)) * Math.pow(1 - t, 1.3);
+        buf[i0 + k] += wave(w, 2 * Math.PI * f * k / SR) * v * env;
+      }
+    });
+    let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(buf[i]));
+    const g = mx > .95 ? .95 / mx : 1;
+    const bytes = new Uint8Array(44 + n * 2), dv = new DataView(bytes.buffer);
+    const wr = (o, str) => { for (let i = 0; i < str.length; i++) dv.setUint8(o + i, str.charCodeAt(i)); };
+    wr(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); wr(8, 'WAVEfmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+    dv.setUint16(22, 1, true); dv.setUint32(24, SR, true); dv.setUint32(28, SR * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+    wr(36, 'data'); dv.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.max(-1, Math.min(1, buf[i] * g)) * 32767, true);
+    let bin = ''; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return 'data:audio/wav;base64,' + btoa(bin);
+  }
+  const cache = {};
+  function sfx(name) {
+    if (!on || !SPEC[name]) return;
+    try {
+      if (!cache[name]) cache[name] = render(name);
+      const a = new Audio(cache[name]); a.volume = 1;
+      const pr = a.play();
+      if (pr && pr.catch) pr.catch(() => { try { webSfx(name); } catch (e) {} });
+    } catch (e) { try { webSfx(name); } catch (e2) {} }
+  }
+  /* احتياطي: WebAudio */
+  function webSfx(name) {
+    SPEC[name].forEach(x => { if (x[0] !== 'n') tone(x[0], x[1], x[2], x[3] === 'sq' ? 'square' : x[3] === 'saw' ? 'sawtooth' : x[3] === 'tri' ? 'triangle' : 'sine', x[4] * .4); });
+  }
+
+  /* ---------- الصوت البشري (صوت الجهاز العربي، نبرة طفولية) ---------- */
+  function speak(text) {
+    if (!on || !('speechSynthesis' in window)) return;
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const vs = speechSynthesis.getVoices();
+      const v = vs.find(x => /ar[-_]EG/i.test(x.lang)) || vs.find(x => /^ar/i.test(x.lang));
+      if (v) u.voice = v;
+      u.lang = v ? v.lang : 'ar-EG'; u.pitch = 1.7; u.rate = 1.05; u.volume = 1;
+      speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  /* ---------- الولد الكرتوني (SVG) ---------- */
+  const BOY = (mood) => `
+  <svg viewBox="0 0 120 140" width="100%" height="100%" aria-hidden="true">
+    <ellipse cx="60" cy="132" rx="30" ry="6" fill="rgba(0,0,0,.2)"/>
+    <path d="M30 128c0-26 14-40 30-40s30 14 30 40z" fill="#d62828"/>
+    <rect x="52" y="78" width="16" height="14" rx="6" fill="#f2b987"/>
+    <circle cx="60" cy="52" r="32" fill="#f7c9a0"/>
+    <path d="M27 48c-2-24 16-34 33-34s35 10 33 34c-6-12-18-16-33-16S33 36 27 48z" fill="#2b1a10"/>
+    <circle cx="28" cy="56" r="6" fill="#f7c9a0"/><circle cx="92" cy="56" r="6" fill="#f7c9a0"/>
+    <circle cx="48" cy="54" r="5" fill="#fff"/><circle cx="72" cy="54" r="5" fill="#fff"/>
+    <circle cx="${mood ? 49 : 48}" cy="55" r="2.6" fill="#222"/><circle cx="${mood ? 73 : 72}" cy="55" r="2.6" fill="#222"/>
+    ${mood
+      ? '<path d="M44 68q16 18 32 0z" fill="#fff" stroke="#8a2b2b" stroke-width="2.5" stroke-linejoin="round"/><path d="M42 44q6-5 12 0M66 44q6-5 12 0" stroke="#2b1a10" stroke-width="3" fill="none" stroke-linecap="round"/>'
+      : '<path d="M46 76q14-10 28 0" stroke="#8a2b2b" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M42 46q6 4 12 0M66 46q6 4 12 0" stroke="#2b1a10" stroke-width="3" fill="none" stroke-linecap="round"/>'}
+    <circle cx="38" cy="66" r="5" fill="#f3a38f" opacity=".6"/><circle cx="82" cy="66" r="5" fill="#f3a38f" opacity=".6"/>
+    ${mood ? '<path d="M92 92l16-22" stroke="#f7c9a0" stroke-width="9" stroke-linecap="round"/><circle cx="109" cy="68" r="7" fill="#f7c9a0"/>' : ''}
+  </svg>`;
+
+  let boyTimer = null;
+  const GOOD = ['أحسنت يا بطل!'];
+  const BAD = ['حظ أوفر المرة القادمة!'];
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+
+  function boy(ok, text) {
+    let el = document.getElementById('fx-boy');
+    if (!el) { el = document.createElement('div'); el.id = 'fx-boy'; document.body.appendChild(el); }
+    text = text || pick(ok ? GOOD : BAD);
+    el.className = 'fx-boy show ' + (ok ? 'happy' : 'sad');
+    el.innerHTML = `<div class="fx-bubble">${text}</div><div class="fx-fig">${BOY(ok)}</div>`;
+    setTimeout(() => speak(text), 700);
+    clearTimeout(boyTimer); boyTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  /* ---------- ورود حمراء تتساقط ---------- */
+  function roses() {
+    const box = document.createElement('div'); box.className = 'fx-roses';
+    let h = '';
+    for (let i = 0; i < 18; i++) {
+      h += `<i style="left:${Math.random() * 96}%;animation-delay:${Math.random() * .8}s;animation-duration:${2 + Math.random() * 1.5}s;font-size:${22 + Math.random() * 18}px">🌹</i>`;
+    }
+    box.innerHTML = h; document.body.appendChild(box);
+    setTimeout(() => box.remove(), 4200);
+  }
+
+  /* تغذية راجعة كاملة: صوت + ولد + (ورود إن صح) */
+  function feedback(ok, text) {
+    sfx(ok ? 'right' : 'wrong'); boy(ok, text); if (ok) roses();
+    const fl = document.createElement('div'); fl.className = 'fx-flash ' + (ok ? 'g' : 'r'); document.body.appendChild(fl); setTimeout(() => fl.remove(), 700);
+  }
+
+  /* ---------- زر الصوت ---------- */
+  function init() {
+    if (document.getElementById('fx-toggle')) return;
+    const b = document.createElement('button');
+    b.id = 'fx-toggle'; b.className = 'fx-toggle'; b.type = 'button';
+    const paint = () => { b.textContent = on ? '🔊 الصوت' : '🔇 صامت'; b.title = on ? 'إيقاف الصوت' : 'تشغيل الصوت'; };
+    b.onclick = () => {
+      on = !on; try { localStorage.setItem('nig_sound', on ? '1' : '0'); } catch (e) {}
+      if (!on && 'speechSynthesis' in window) speechSynthesis.cancel();
+      paint(); if (on) { sfx('right'); speak('الصوت شغّال يا بطل'); }
+    };
+    paint();
+    document.body.appendChild(b);
+    if ('speechSynthesis' in window) speechSynthesis.getVoices();
+  }
+  document.addEventListener('DOMContentLoaded', init);
+  if (document.readyState !== 'loading') init();
+
+  return { state: () => (ctx ? ctx.state : 'none'), sfx, speak, boy, roses, feedback, init, isOn: () => on };
+})();
+
+
+==========================================================================================
+FILE: game-work/js/cards-data.js
+==========================================================================================
+
+/* cards-data.js — بيانات البطاقات والأسئلة. الإجابة الصحيحة هي الاختيار الأول في o (تُخلط أثناء اللعب).
+   يمكن تعديل أي سؤال هنا؛ وفي المرحلة 7 ستتولى لوحة المعلمة ذلك. */
+window.NIG=window.NIG||{};
+NIG.BACKS={
+ "info": "assets/cards/final/backs/info.jpg",
+ "flag": "assets/cards/final/backs/flag.jpg",
+ "culture": "assets/cards/final/backs/culture.jpg",
+ "history": "assets/cards/final/backs/history.jpg",
+ "geography": "assets/cards/final/backs/geography.jpg",
+ "figures": "assets/cards/final/backs/figures.jpg",
+ "battles": "assets/cards/final/backs/battles.jpg",
+ "values": "assets/cards/final/backs/values.jpg",
+ "challenge": "assets/cards/final/backs/challenge.jpg"
+};
+NIG.CARDS=[
+{
+"id": "battles-01",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-001.jpg",
+"num": 1,
+"q": "ما نتيجة معركة مجدو في العصر الفرعوني؟",
+"o": [
+"انتصار مصر وتوسيع نفوذها في الشام",
+"هزيمة مصر",
+"احتلال مصر",
+"خروج مصر من الشام"
+]
+},
+{
+"id": "battles-02",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-002.jpg",
+"num": 2,
+"q": "ماذا نتج عن معركة قادش؟",
+"o": [
+"انتصار استراتيجي وتوقيع أول معاهدة سلام",
+"احتلال مصر",
+"اختفاء الجيش المصري",
+"قيام الدولة الأيوبية"
+]
+},
+{
+"id": "battles-03",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-003.jpg",
+"num": 3,
+"q": "من كان عدو مصر في معركة عين جالوت (1260م)؟",
+"o": [
+"المغول",
+"الهكسوس",
+"الإنجليز",
+"الفرنسيون"
+]
+},
+{
+"id": "battles-04",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-004.jpg",
+"num": 4,
+"q": "ماذا حققت مصر في حرب أكتوبر 1973؟",
+"o": [
+"عبور قناة السويس وتحقيق نصر عظيم",
+"احتلال سيناء",
+"هزيمة كبرى",
+"التنازل عن قناة السويس"
+]
+},
+{
+"id": "battles-05",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-005.jpg",
+"num": 5,
+"q": "من الملك الذي انتصر على الهكسوس وطردهم من مصر؟",
+"o": [
+"الملك أحمس",
+"الملك مينا",
+"الملك زوسر",
+"الملك أخناتون"
+]
+},
+{
+"id": "battles-06",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-006.jpg",
+"num": 6,
+"q": "من قاد جيش الفتح الإسلامي لمصر؟",
+"o": [
+"عمرو بن العاص",
+"محمد علي",
+"أحمس",
+"صلاح الدين"
+]
+},
+{
+"id": "battles-07",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-007.jpg",
+"num": 7,
+"q": "ماذا حدث بعد خروج الحملة الفرنسية من مصر؟",
+"o": [
+"بداية نهضة محمد علي",
+"بداية الاحتلال البريطاني",
+"قيام الدولة الفاطمية",
+"ثورة 1952"
+]
+},
+{
+"id": "battles-08",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-008.jpg",
+"num": 8,
+"q": "ما سبب العدوان الثلاثي على مصر؟",
+"o": [
+"تأميم قناة السويس",
+"ثورة 1919",
+"بناء السد العالي",
+"فتح مصر"
+]
+},
+{
+"id": "battles-09",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-009.jpg",
+"num": 9,
+"q": "ماذا نتج عن معركة التل الكبير عام 1882م؟",
+"o": [
+"الاحتلال البريطاني لمصر",
+"انتصار مصر",
+"خروج الإنجليز",
+"نهاية الحملة الفرنسية"
+]
+},
+{
+"id": "battles-10",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-010.jpg",
+"num": 10,
+"q": "من الملك الذي وحّد القطرين (مصر العليا والسفلى)؟",
+"o": [
+"الملك مينا",
+"الملك رمسيس الثاني",
+"الملك توت عنخ آمون",
+"الملك تحتمس الثالث"
+]
+},
+{
+"id": "battles-11",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-011.jpg",
+"num": 11,
+"q": "ما سبب قيام ثورة 1919؟",
+"o": [
+"المطالبة بالاستقلال والحرية",
+"بناء السد العالي",
+"تأميم القناة",
+"حرب الهكسوس"
+]
+},
+{
+"id": "battles-12",
+"cat": "battles",
+"img": "assets/cards/final/battles/battles-012.jpg",
+"num": 12,
+"q": "ما سبب حرب أكتوبر المجيدة؟",
+"o": [
+"استرداد الأرض والكرامة",
+"اكتشاف النفط",
+"بناء الأهرامات",
+"تأميم قناة السويس"
+]
+},
+{
+"id": "culture-01",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-001.jpg",
+"num": 1,
+"q": "أي مما يلي من العادات الاجتماعية المصرية؟",
+"o": [
+"إكرام الضيف",
+"إهمال الجار",
+"قطع صلة الرحم",
+"عدم احترام الكبير"
+]
+},
+{
+"id": "culture-02",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-002.jpg",
+"num": 2,
+"q": "أي مما يلي من تقاليد المصريين في الأعياد؟",
+"o": [
+"توزيع الحلويات وزيارة الأقارب",
+"البقاء وحدنا في البيت",
+"تجاهل الأقارب",
+"إلغاء الاحتفال"
+]
+},
+{
+"id": "culture-03",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-003.jpg",
+"num": 3,
+"q": "أي فن شعبي يُمارس في الصعيد؟",
+"o": [
+"التحطيب",
+"الباليه",
+"الأوبرا",
+"الجاز"
+]
+},
+{
+"id": "culture-05",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-005.jpg",
+"num": 5,
+"q": "أي مما يلي من التراث غير المادي؟",
+"o": [
+"الحكايات الشعبية والأمثال والأغاني التراثية",
+"الأهرامات",
+"المتحف المصري",
+"القلعة"
+]
+},
+{
+"id": "culture-06",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-006.jpg",
+"num": 6,
+"q": "ما اللغة التي توحّد الشعب المصري وتُستخدم في التعليم والإعلام والأدب؟",
+"o": [
+"اللغة العربية",
+"الهيروغليفية",
+"الفرنسية",
+"القبطية القديمة فقط"
+]
+},
+{
+"id": "culture-07",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-007.jpg",
+"num": 7,
+"q": "أي مما يلي من الأكلات الشعبية المصرية؟",
+"o": [
+"الكشري",
+"السوشي",
+"البيتزا",
+"الهامبورجر"
+]
+},
+{
+"id": "culture-09",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-009.jpg",
+"num": 9,
+"q": "أكمل المثل: «الصبر مفتاح ...»",
+"o": [
+"الفرج",
+"الغنى",
+"السفر",
+"الحرب"
+]
+},
+{
+"id": "culture-10",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-010.jpg",
+"num": 10,
+"q": "ماذا تعبّر الموسيقى والغناء عنه؟",
+"o": [
+"مشاعر الناس وتاريخهم",
+"الأرقام الحسابية فقط",
+"حالة الطقس",
+"أسعار السلع"
+]
+},
+{
+"id": "culture-11",
+"cat": "culture",
+"img": "assets/cards/final/culture/culture-011.jpg",
+"num": 11,
+"q": "ماذا يعرض المسرح؟",
+"o": [
+"قصص المجتمع ومشكلاته بطريقة فنية",
+"نتائج الامتحانات",
+"أخبار الطقس",
+"أسعار السوق"
+]
+},
+{
+"id": "figures-01",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-001.jpg",
+"num": 1,
+"q": "من هو أول رئيس لجمهورية مصر؟",
+"o": [
+"محمد نجيب",
+"جمال عبد الناصر",
+"أنور السادات",
+"سعد زغلول"
+]
+},
+{
+"id": "figures-02",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-002.jpg",
+"num": 2,
+"q": "من قائد ثورة يوليو الذي أمّم قناة السويس وبنى السد العالي؟",
+"o": [
+"جمال عبد الناصر",
+"أنور السادات",
+"محمد نجيب",
+"أحمد عرابي"
+]
+},
+{
+"id": "figures-03",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-003.jpg",
+"num": 3,
+"q": "من الرئيس الذي قاد حرب أكتوبر واستعاد أرض سيناء؟",
+"o": [
+"أنور السادات",
+"جمال عبد الناصر",
+"محمد فريد",
+"طلعت حرب"
+]
+},
+{
+"id": "figures-05",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-005.jpg",
+"num": 5,
+"q": "من قائد ثورة 1919 الذي قاد الشعب للمطالبة بالاستقلال؟",
+"o": [
+"سعد زغلول",
+"أحمد عرابي",
+"محمد نجيب",
+"طلعت حرب"
+]
+},
+{
+"id": "figures-06",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-006.jpg",
+"num": 6,
+"q": "من مؤسس بنك مصر والاقتصادي الذي دعم الاقتصاد الوطني؟",
+"o": [
+"طلعت حرب",
+"أحمد زويل",
+"مجدي يعقوب",
+"محمد فريد"
+]
+},
+{
+"id": "figures-07",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-007.jpg",
+"num": 7,
+"q": "من العالم المصري الحاصل على جائزة نوبل لاكتشافه الفيمتوثانية؟",
+"o": [
+"أحمد زويل",
+"مجدي يعقوب",
+"طلعت حرب",
+"سعد زغلول"
+]
+},
+{
+"id": "figures-08",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-008.jpg",
+"num": 8,
+"q": "من جراح القلب العالمي الذي أنشأ مركزًا لعلاج المرضى مجانًا؟",
+"o": [
+"مجدي يعقوب",
+"أحمد زويل",
+"عبد المنعم رياض",
+"محمد نجيب"
+]
+},
+{
+"id": "figures-11",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-011.jpg",
+"num": 11,
+"q": "من الزعيم الذي استكمل مسيرة مصطفى كامل؟",
+"o": [
+"محمد فريد",
+"سعد زغلول",
+"أنور السادات",
+"جمال عبد الناصر"
+]
+},
+{
+"id": "figures-12",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-012.jpg",
+"num": 12,
+"q": "من القائد العسكري الذي استشهد أثناء حرب الاستنزاف؟",
+"o": [
+"عبد المنعم رياض",
+"أحمد عرابي",
+"محمد نجيب",
+"طلعت حرب"
+]
+},
+{
+"id": "figures-13",
+"cat": "figures",
+"img": "assets/cards/final/figures/figures-013.jpg",
+"num": 13,
+"q": "من قائد الثورة العرابية المطالِبة بالعدل والمساواة؟",
+"o": [
+"أحمد عرابي",
+"سعد زغلول",
+"محمد فريد",
+"محمد نجيب"
+]
+},
+{
+"id": "flag-01",
+"cat": "flag",
+"img": "assets/cards/final/flag/flag-001.jpg",
+"num": 1,
+"q": "ماذا يرمز اللون الأبيض في علم مصر؟",
+"o": [
+"السلام",
+"التضحيات",
+"نهاية الظلم",
+"الخير"
+]
+},
+{
+"id": "flag-02",
+"cat": "flag",
+"img": "assets/cards/final/flag/flag-002.jpg",
+"num": 2,
+"q": "أي سلوك يعبّر عن احترام علم مصر؟",
+"o": [
+"الوقوف باحترام أثناء النشيد الوطني",
+"رمي العلم على الأرض",
+"استخدام العلم بطريقة مسيئة",
+"تجاهل العلم عند رفعه"
+]
+},
+{
+"id": "geography-01",
+"cat": "geography",
+"img": "assets/cards/final/geography/geography-001.jpg",
+"num": 1,
+"q": "كيف يؤثر موقع مصر الاستراتيجي على علاقتها بالعالم؟",
+"o": [
+"جعلها على تواصل دائم مع حضارات مختلفة",
+"عزلها عن العالم",
+"جعلها بعيدة عن القارات الأخرى",
+"منع التجارة معها"
+]
+},
+{
+"id": "geography-02",
+"cat": "geography",
+"img": "assets/cards/final/geography/geography-002.jpg",
+"num": 2,
+"q": "لماذا ارتبطت حياة المصريين بنهر النيل منذ القدم؟",
+"o": [
+"لأنه المصدر الأساسي للمياه والزراعة",
+"لأنه يقع في الصحراء",
+"لأنه لا يصلح للزراعة",
+"لأنه مجرد بحيرة صغيرة"
+]
+},
+{
+"id": "geography-03",
+"cat": "geography",
+"img": "assets/cards/final/geography/geography-003.jpg",
+"num": 3,
+"q": "لماذا يتركز السكان في وادي النيل والدلتا؟",
+"o": [
+"لتوفر المياه والأراضي الزراعية",
+"لأنها صحراء جافة",
+"لعدم وجود مدن بها",
+"لبعدها عن المياه"
+]
+},
+{
+"id": "geography-06",
+"cat": "geography",
+"img": "assets/cards/final/geography/geography-006.jpg",
+"num": 6,
+"q": "ما أهمية البحر المتوسط لمصر؟",
+"o": [
+"يربطها بدول أوروبا ويجعلها منفتحة تجاريًا وثقافيًا",
+"يفصلها عن أوروبا",
+"يقع جنوب مصر",
+"لا أهمية له"
+]
+},
+{
+"id": "geography-08",
+"cat": "geography",
+"img": "assets/cards/final/geography/geography-008.jpg",
+"num": 8,
+"q": "لماذا تعتبر قناة السويس مهمة للعالم؟",
+"o": [
+"لأنها ممر مائي يربط البحرين الأحمر والمتوسط",
+"لأنها تربط النيل بالبحر الأحمر",
+"لأنها بحيرة للسياحة فقط",
+"لأنها تقع في الصحراء الغربية"
+]
+},
+{
+"id": "geography-09",
+"cat": "geography",
+"img": "assets/cards/final/geography/geography-009.jpg",
+"num": 9,
+"q": "لماذا يُعتبر البحر الأحمر مهمًا للسياحة؟",
+"o": [
+"لشعابه المرجانية وثرواته البحرية",
+"لأنه لا يوجد به أسماك",
+"لأنه بعيد عن مصر",
+"لأنه نهر عذب"
+]
+},
+{
+"id": "history-01",
+"cat": "history",
+"img": "assets/cards/final/history/history-001.jpg",
+"num": 1,
+"q": "ما الكتابة التي ظهرت في الحضارة المصرية القديمة؟",
+"o": [
+"الهيروغليفية",
+"المسمارية",
+"اللاتينية",
+"الصينية"
+]
+},
+{
+"id": "history-02",
+"cat": "history",
+"img": "assets/cards/final/history/history-002.jpg",
+"num": 2,
+"q": "لماذا يُعد نهر النيل شريان الحياة في مصر؟",
+"o": [
+"لأن الزراعة والحياة قامت على مياهه",
+"لأنه يحيط بمصر من كل الجهات",
+"لأنه بحر مالح",
+"لأنه يقع في الصحراء الغربية"
+]
+},
+{
+"id": "history-03",
+"cat": "history",
+"img": "assets/cards/final/history/history-003.jpg",
+"num": 3,
+"q": "تحت حكم من دخلت مصر في العصور المتأخرة؟",
+"o": [
+"الإسكندر الأكبر والرومان",
+"الهكسوس والحيثيين",
+"المغول والتتار",
+"الفرس فقط"
+]
+},
+{
+"id": "history-04",
+"cat": "history",
+"img": "assets/cards/final/history/history-004.jpg",
+"num": 4,
+"q": "ماذا انتشر في العصر القبطي؟",
+"o": [
+"الفن القبطي وبناء الكنائس واللغة القبطية",
+"بناء الأهرام",
+"بناء القلعة",
+"بناء الأزهر"
+]
+},
+{
+"id": "history-05",
+"cat": "history",
+"img": "assets/cards/final/history/history-005.jpg",
+"num": 5,
+"q": "في أي عام دخل الإسلام مصر؟",
+"o": [
+"641م",
+"1952م",
+"1973م",
+"332 ق.م"
+]
+},
+{
+"id": "history-06",
+"cat": "history",
+"img": "assets/cards/final/history/history-006.jpg",
+"num": 6,
+"q": "أي من هذه المعالم شاهد على عمران العصر الفاطمي والأيوبي والمملوكي؟",
+"o": [
+"الأزهر والقلعة",
+"أبو سمبل",
+"الهرم الأكبر",
+"السد العالي"
+]
+},
+{
+"id": "history-07",
+"cat": "history",
+"img": "assets/cards/final/history/history-007.jpg",
+"num": 7,
+"q": "من الذي أسّس مصر الحديثة وبنى جيشًا قويًا ومصانع ومدارس؟",
+"o": [
+"محمد علي باشا",
+"أحمس الأول",
+"سعد زغلول",
+"محمد نجيب"
+]
+},
+{
+"id": "history-08",
+"cat": "history",
+"img": "assets/cards/final/history/history-008.jpg",
+"num": 8,
+"q": "ضد من قامت ثورة 1919؟",
+"o": [
+"الاحتلال البريطاني",
+"الحيثيين",
+"المغول",
+"الفرنسيين"
+]
+},
+{
+"id": "history-09",
+"cat": "history",
+"img": "assets/cards/final/history/history-009.jpg",
+"num": 9,
+"q": "ماذا أعلنت ثورة 1952؟",
+"o": [
+"إنهاء الملكية وإعلان الجمهورية",
+"بناء الهرم الأكبر",
+"حفر قناة السويس",
+"إنشاء بنك مصر"
+]
+},
+{
+"id": "history-10",
+"cat": "history",
+"img": "assets/cards/final/history/history-010.jpg",
+"num": 10,
+"q": "ماذا استعادت مصر في حرب أكتوبر 1973؟",
+"o": [
+"أرضها في سيناء",
+"قناة السويس من الفرنسيين",
+"الإسكندرية",
+"النوبة"
+]
+},
+{
+"id": "history-11",
+"cat": "history",
+"img": "assets/cards/final/history/history-011.jpg",
+"num": 11,
+"q": "بين أي قارات كانت مصر مركزًا للتجارة؟",
+"o": [
+"أفريقيا وآسيا وأوروبا",
+"أمريكا وأستراليا",
+"أنتاركتيكا وآسيا",
+"أمريكا وأوروبا فقط"
+]
+},
+{
+"id": "history-12",
+"cat": "history",
+"img": "assets/cards/final/history/history-012.jpg",
+"num": 12,
+"q": "أي مما يلي من مشروعات مصر في عهد التطوير الحديث؟",
+"o": [
+"الطرق الجديدة والمدن الحديثة",
+"بناء الأهرامات",
+"بناء القلعة",
+"حفر قناة السويس القديمة"
+]
+},
+{
+"id": "info-01",
+"cat": "info",
+"img": "assets/cards/final/info/info-001.jpg",
+"num": 1,
+"q": "أي مما يلي يُعد من عناصر الهوية الوطنية؟",
+"o": [
+"التاريخ المشترك والثقافة واللغة والقيم",
+"الملابس الأجنبية فقط",
+"الألعاب الإلكترونية",
+"الموضة المنتشرة بين الناس"
+]
+},
+{
+"id": "info-02",
+"cat": "info",
+"img": "assets/cards/final/info/info-002.jpg",
+"num": 2,
+"q": "أي مما يلي من أضرار فقدان الهوية الوطنية؟",
+"o": [
+"ضعف الانتماء للوطن وتشتت المجتمع",
+"زيادة حب الوطن",
+"قوة الترابط بين الناس",
+"الحفاظ على التراث"
+]
+},
+{
+"id": "info-03",
+"cat": "info",
+"img": "assets/cards/final/info/info-003.jpg",
+"num": 3,
+"q": "أي مما يلي من فوائد الهوية الوطنية؟",
+"o": [
+"تقوّي الانتماء وحب الوطن وتوحّد الشعب على قيم واحدة",
+"تجعلنا ننسى تاريخنا",
+"تقلل الاهتمام بالتراث",
+"تفرّق الناس بعضهم عن بعض"
+]
+},
+{
+"id": "pharaohs-01",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-101.jpg",
+"num": 1,
+"q": "من الملك الذي قاد معركة قادش وبنى معبد أبو سمبل؟",
+"o": [
+"رمسيس الثاني",
+"أحمس الأول",
+"زوسر",
+"توت عنخ آمون"
+]
+},
+{
+"id": "pharaohs-02",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-102.jpg",
+"num": 2,
+"q": "من الملك مؤسس الدولة الحديثة الذي طرد الهكسوس؟",
+"o": [
+"أحمس الأول",
+"رمسيس الثاني",
+"آخناتون",
+"زوسر"
+]
+},
+{
+"id": "pharaohs-03",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-103.jpg",
+"num": 3,
+"q": "من أحد أعظم القادة العسكريين الذي وسّع حدود مصر؟",
+"o": [
+"تحتمس الثالث",
+"توت عنخ آمون",
+"نفرتيتي",
+"زوسر"
+]
+},
+{
+"id": "pharaohs-06",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-106.jpg",
+"num": 6,
+"q": "من الملك الشاب الذي اشتهر بمقبرته؟",
+"o": [
+"توت عنخ آمون",
+"رمسيس الثاني",
+"تحتمس الثالث",
+"أحمس الأول"
+]
+},
+{
+"id": "pharaohs-07",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-107.jpg",
+"num": 7,
+"q": "من الملك العظيم الذي ازدهر الفن والعمارة في عهد السلام الذي حكمه؟",
+"o": [
+"إمنحتب الثالث",
+"أحمس الأول",
+"زوسر",
+"توت عنخ آمون"
+]
+},
+{
+"id": "pharaohs-08",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-108.jpg",
+"num": 8,
+"q": "من الملك الذي بنى أول هرم مدرّج في سقارة؟",
+"o": [
+"زوسر",
+"رمسيس الثاني",
+"إمنحتب الثالث",
+"آخناتون"
+]
+},
+{
+"id": "pharaohs-09",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-109.jpg",
+"num": 9,
+"q": "من الملك الذي دعا إلى عبادة إله واحد؟",
+"o": [
+"آخناتون",
+"رمسيس الثاني",
+"تحتمس الثالث",
+"زوسر"
+]
+},
+{
+"id": "pharaohs-10",
+"cat": "pharaohs",
+"img": "assets/cards/final/figures/figures-110.jpg",
+"num": 10,
+"q": "من زوجة الملك آخناتون؟",
+"o": [
+"نفرتيتي",
+"أحمس",
+"سعد زغلول",
+"تحتمس"
+]
+},
+{
+"id": "values-01",
+"cat": "values",
+"img": "assets/cards/final/values/values-001.jpg",
+"num": 1,
+"q": "تشاهد شخصًا يرمي القمامة في الشارع أمام المدرسة. ماذا ستفعل؟",
+"o": [
+"أنصحه بلطف بوضعها في سلة المهملات",
+"أتجاهله وأمشي",
+"أرمي معه القمامة",
+"أسخر منه"
+]
+},
+{
+"id": "values-02",
+"cat": "values",
+"img": "assets/cards/final/values/values-002.jpg",
+"num": 2,
+"q": "زميلك لا يستطيع حل واجب الرياضيات. كيف تتصرف؟",
+"o": [
+"أساعده على فهم الحل",
+"أتركه وأذهب",
+"أسخر منه",
+"أعطيه الحل ليكتبه دون فهم"
+]
+},
+{
+"id": "values-03",
+"cat": "values",
+"img": "assets/cards/final/values/values-003.jpg",
+"num": 3,
+"q": "طالب يختلف معك في الرأي داخل الفصل. ماذا تفعل؟",
+"o": [
+"أحترم رأيه وأناقشه بهدوء",
+"أتشاجر معه",
+"أسخر من رأيه",
+"أتجاهله دائمًا"
+]
+},
+{
+"id": "values-04",
+"cat": "values",
+"img": "assets/cards/final/values/values-004.jpg",
+"num": 4,
+"q": "درس صعب وتشعر بالملل من المذاكرة. كيف تتصرف؟",
+"o": [
+"أستمر وأطلب المساعدة وأقسّم المذاكرة",
+"أترك الدراسة",
+"أغش في الامتحان",
+"أنام وأتجاهل الدرس"
+]
+},
+{
+"id": "values-05",
+"cat": "values",
+"img": "assets/cards/final/values/values-005.jpg",
+"num": 5,
+"q": "وجدت نقودًا في فناء المدرسة. ماذا ستفعل؟",
+"o": [
+"أسلّمها للمعلم أو إدارة المدرسة",
+"آخذها لنفسي",
+"أخفيها عن الجميع",
+"أنفقها مع أصدقائي"
+]
+},
+{
+"id": "values-06",
+"cat": "values",
+"img": "assets/cards/final/values/values-006.jpg",
+"num": 6,
+"q": "وجدت مقعدًا مكسورًا في المدرسة. كيف تتصرف؟",
+"o": [
+"أبلّغ المعلم أو الإدارة ليتم إصلاحه",
+"أكسره أكثر",
+"أتجاهله",
+"أكتب عليه"
+]
+},
+{
+"id": "values-07",
+"cat": "values",
+"img": "assets/cards/final/values/values-007.jpg",
+"num": 7,
+"q": "لديك امتحان قريب. ماذا ستفعل للاستعداد؟",
+"o": [
+"أنظّم وقتي وأذاكر كل يوم",
+"أنتظر آخر ليلة",
+"أعتمد على الغش",
+"لا أذاكر"
+]
+},
+{
+"id": "values-08",
+"cat": "values",
+"img": "assets/cards/final/values/values-008.jpg",
+"num": 8,
+"q": "طفل يلمس الآثار في المتحف. كيف تتصرف؟",
+"o": [
+"أنصحه بلطف بعدم لمسها للحفاظ عليها",
+"ألمسها معه",
+"أتجاهله",
+"أضحك عليه"
+]
+},
+{
+"id": "values-09",
+"cat": "values",
+"img": "assets/cards/final/values/values-009.jpg",
+"num": 9,
+"q": "ترى زميلًا يتعرض للظلم. ماذا تفعل؟",
+"o": [
+"أدافع عنه وأبلّغ المعلم",
+"أتجاهل الموقف",
+"أشارك في إيذائه",
+"أضحك مع الآخرين"
+]
+},
+{
+"id": "values-10",
+"cat": "values",
+"img": "assets/cards/final/values/values-010.jpg",
+"num": 10,
+"q": "انتهيت من تناول الطعام في الفصل. ماذا تفعل بعد ذلك؟",
+"o": [
+"أضع المخلفات في سلة المهملات",
+"أتركها على الأرض",
+"أرميها من النافذة",
+"أترك الأمر لغيري"
+]
+},
+{
+"id": "values-11",
+"cat": "values",
+"img": "assets/cards/final/values/values-011.jpg",
+"num": 11,
+"q": "في مشروع مدرسي، كل واحد يريد العمل وحده. كيف تتعامل مع الموقف؟",
+"o": [
+"أقترح تقسيم المهام والعمل معًا كفريق",
+"أعمل وحدي وأتجاهلهم",
+"أترك المشروع",
+"أنتقد الجميع"
+]
+},
+{
+"id": "values-12",
+"cat": "values",
+"img": "assets/cards/final/values/values-012.jpg",
+"num": 12,
+"q": "المعلم يشرح الدرس. كيف تتصرف أثناء الشرح؟",
+"o": [
+"أنصت وأرفع يدي إن أردت السؤال",
+"أتكلم مع زميلي",
+"ألعب بالهاتف",
+"أقاطع المعلم"
+]
+},
+{
+"id": "values-13",
+"cat": "values",
+"img": "assets/cards/final/values/values-013.jpg",
+"num": 13,
+"q": "نسيت حل سؤال في الامتحان وطلب منك زميلك أن تنقل منه. ماذا ستفعل؟",
+"o": [
+"أرفض الغش وأجيب بما أعرفه بصدق",
+"أنقل منه",
+"أطلب منه الإجابة كلها",
+"أمزق الورقة"
+]
+},
+{
+"id": "values-14",
+"cat": "values",
+"img": "assets/cards/final/values/values-014.jpg",
+"num": 14,
+"q": "ترى شخصًا يعبر الطريق من مكان غير مخصص للمشاة. كيف تتصرف؟",
+"o": [
+"أنصحه بلطف باستخدام مكان عبور المشاة",
+"أعبر معه",
+"أتجاهل الأمر",
+"أضحك عليه"
+]
+},
+{
+"id": "values-15",
+"cat": "values",
+"img": "assets/cards/final/values/values-015.jpg",
+"num": 15,
+"q": "تجد أشخاصًا يلقون القمامة في نهر النيل. ماذا تفعل؟",
+"o": [
+"أنصحهم بعدم تلويث النيل وأبلّغ المسؤولين عند الحاجة",
+"أرمي معهم",
+"أتجاهلهم",
+"أصوّرهم وأضحك"
+]
+},
+{
+"id": "values-16",
+"cat": "values",
+"img": "assets/cards/final/values/values-016.jpg",
+"num": 16,
+"q": "كبير في السن يحتاج المساعدة في حمل أشياء ثقيلة. ماذا ستفعل؟",
+"o": [
+"أساعده بأدب",
+"أتجاهله",
+"أضحك عليه",
+"أنتظر أحدًا آخر"
+]
+},
+{
+"id": "values-17",
+"cat": "values",
+"img": "assets/cards/final/values/values-017.jpg",
+"num": 17,
+"q": "زميلك أزعجك في الفصل عمدًا. كيف تتصرف؟",
+"o": [
+"أحافظ على هدوئي وأخبر المعلم عند الحاجة",
+"أضربه",
+"أصرخ عليه",
+"أنتقم منه"
+]
+},
+{
+"id": "values-18",
+"cat": "values",
+"img": "assets/cards/final/values/values-018.jpg",
+"num": 18,
+"q": "عندك موعد مدرسي مهم لكنك متأخر. ماذا ستفعل؟",
+"o": [
+"أتوجه فورًا وأعتذر بأدب وأنظّم وقتي لأتجنب التأخر",
+"أتجاهل الموعد",
+"أختلق عذرًا كاذبًا",
+"أعود إلى البيت"
+]
+},
+{
+"id": "values-19",
+"cat": "values",
+"img": "assets/cards/final/values/values-019.jpg",
+"num": 19,
+"q": "هناك حملة لتنظيف المدرسة. هل ستشارك؟ وكيف؟",
+"o": [
+"أشارك بحماس وأتعاون مع زملائي",
+"أبتعد عنها",
+"أنتظر حتى ينتهي الآخرون",
+"أسخر من الحملة"
+]
+},
+{
+"id": "values-20",
+"cat": "values",
+"img": "assets/cards/final/values/values-020.jpg",
+"num": 20,
+"q": "عندك مشروع مدرسي وتريد فكرة جديدة. ماذا ستفعل؟",
+"o": [
+"أفكر في فكرة مبتكرة وأطبقها بجهدي",
+"أنسخ فكرة زميلي",
+"أترك المشروع",
+"أطلب من غيري عمله"
+]
+},
+{
+"id": "values-21",
+"cat": "values",
+"img": "assets/cards/final/values/values-021.jpg",
+"num": 21,
+"q": "زميلك نسي أدواته المدرسية. كيف تتعامل مع الموقف؟",
+"o": [
+"أشاركه أدواتي",
+"أرفض مساعدته",
+"أضحك عليه",
+"أخفي أدواته"
+]
+},
+{
+"id": "values-22",
+"cat": "values",
+"img": "assets/cards/final/values/values-022.jpg",
+"num": 22,
+"q": "لديك وقت فراغ بعد المدرسة. ماذا ستفعل بهذا الوقت؟",
+"o": [
+"أقرأ كتابًا مفيدًا",
+"أضيّعه كله في اللعب",
+"أنام طوال اليوم",
+"أتجاهل كل شيء"
+]
+},
+{
+"id": "values-23",
+"cat": "values",
+"img": "assets/cards/final/values/values-023.jpg",
+"num": 23,
+"q": "ترى عامل نظافة في الشارع. كيف ستتعامل معه؟",
+"o": [
+"أحييه وأشكره وأحترم عمله",
+"أتجاهله",
+"أسخر من عمله",
+"أرمي القمامة أمامه"
+]
+},
+{
+"id": "values-24",
+"cat": "values",
+"img": "assets/cards/final/values/values-024.jpg",
+"num": 24,
+"q": "تجد أحد الأطفال يخرّب مقعدًا في الحديقة. ماذا تفعل؟",
+"o": [
+"أنصحه بأن المقاعد ملك للجميع ويجب الحفاظ عليها",
+"أخرّب معه",
+"أتجاهله",
+"أصوّره وأضحك"
+]
+},
+{
+"id": "challenge-belong-2",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1012.jpg",
+"kind": "open",
+"title": "قوة الانتماء",
+"task": "لو كنت سفيرًا لمصر، ماذا ستقول للعالم عنها في جملة واحدة؟ (في 30 ثانية)",
+"pts": 20,
+"back": 5,
+"sec": 30,
+"num": "belong-2"
+},
+{
+"id": "challenge-create-1",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1003.jpg",
+"kind": "open",
+"title": "تحدي الإبداع",
+"task": "ارسم علم مصر في 30 ثانية",
+"pts": 20,
+"back": 1,
+"sec": 30,
+"draw": true,
+"num": "create-1"
+},
+{
+"id": "challenge-create-2",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1006.jpg",
+"kind": "open",
+"title": "تحدي الإبداع",
+"task": "اكتب رسالة قصيرة لعلم مصر",
+"pts": 20,
+"back": 1,
+"sec": 60,
+"num": "create-2"
+},
+{
+"id": "challenge-create-3",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1007.jpg",
+"kind": "open",
+"title": "تحدي الإبداع",
+"task": "مثّل مشهدًا يوضح احترام العلم",
+"pts": 20,
+"back": 1,
+"sec": 60,
+"num": "create-3"
+},
+{
+"id": "challenge-create-4",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1008.jpg",
+"kind": "open",
+"title": "تحدي الإبداع",
+"task": "ابتكر شعارًا يعبّر عن حب الوطن",
+"pts": 20,
+"back": 1,
+"sec": 60,
+"num": "create-4"
+},
+{
+"id": "challenge-fill-1",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1001.jpg",
+"kind": "mcq",
+"title": "تحدي أكمل الجملة",
+"task": "علم مصر يتكون من ... ألوان",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"ثلاثة",
+"اثنين",
+"أربعة",
+"خمسة"
+],
+"num": "fill-1"
+},
+{
+"id": "challenge-fill-2",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1009.jpg",
+"kind": "mcq",
+"title": "تحدي أكمل الجملة",
+"task": "اللون الأحمر يرمز إلى ...",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"التضحيات",
+"السلام",
+"العلم",
+"الشجاعة فقط"
+],
+"num": "fill-2"
+},
+{
+"id": "challenge-fill-5",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1002.jpg",
+"kind": "mcq",
+"title": "تحدي أكمل الجملة",
+"task": "في وسط العلم يوجد ...",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"النسر",
+"الهرم",
+"الهلال",
+"النجمة"
+],
+"num": "fill-5"
+},
+{
+"id": "challenge-hero-5",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1015.jpg",
+"kind": "open",
+"title": "خطر الاختفاء",
+"task": "سؤال تفكير: كيف تحمي نفسك من تقليد الثقافات بشكل خاطئ؟ (في 30 ثانية)",
+"pts": 20,
+"back": 1,
+"sec": 30,
+"swap": true,
+"num": "hero-5"
+},
+{
+"id": "challenge-hero-7",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1017.jpg",
+"kind": "mcq",
+"title": "تحدي البطل",
+"task": "إذا واجهت شخصًا يقلل من تاريخ بلدك... ماذا تفعل؟",
+"pts": 20,
+"back": 2,
+"sec": 0,
+"o": [
+"أرد بمعلومة صحيحة",
+"أسكت",
+"أقلّد الآخرين",
+"أتجاهله وأسخر منه"
+],
+"num": "hero-7"
+},
+{
+"id": "challenge-know-2",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1026.jpg",
+"kind": "mcq",
+"title": "تحدي المعرفة",
+"task": "ماذا يرمز اللون الأحمر في العلم؟",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"التضحيات",
+"السلام",
+"نهاية الظلم",
+"الخير"
+],
+"num": "know-2"
+},
+{
+"id": "challenge-know-3",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1027.jpg",
+"kind": "mcq",
+"title": "تحدي المعرفة",
+"task": "ماذا يرمز اللون الأبيض في العلم؟",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"السلام",
+"التضحيات",
+"نهاية الظلم",
+"القوة"
+],
+"num": "know-3"
+},
+{
+"id": "challenge-know-4",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1023.jpg",
+"kind": "mcq",
+"title": "تحدي المعرفة",
+"task": "ماذا يرمز اللون الأسود في العلم؟",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"نهاية الظلم",
+"السلام",
+"التضحيات",
+"الخير"
+],
+"num": "know-4"
+},
+{
+"id": "challenge-know-6",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1024.jpg",
+"kind": "mcq",
+"title": "تحدي المعرفة",
+"task": "ما اسم النسر الموجود في العلم؟",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"نسر صلاح الدين",
+"نسر الأهرام",
+"نسر النيل",
+"نسر الجيزة"
+],
+"num": "know-6"
+},
+{
+"id": "challenge-know-7",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1025.jpg",
+"kind": "mcq",
+"title": "تحدي المعرفة",
+"task": "النسر يرتبط بأي قائد تاريخي؟",
+"pts": 10,
+"back": 1,
+"sec": 0,
+"o": [
+"صلاح الدين الأيوبي",
+"رمسيس الثاني",
+"محمد علي",
+"سعد زغلول"
+],
+"num": "know-7"
+},
+{
+"id": "challenge-life-4",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1014.jpg",
+"kind": "open",
+"title": "الهوية في حياتك",
+"task": "تحدٍّ جماعي: في 30 ثانية اذكروا 3 كلمات مصرية شعبية تستخدمونها في حياتكم اليومية",
+"pts": 20,
+"back": 1,
+"sec": 30,
+"num": "life-4"
+},
+{
+"id": "challenge-message-8",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1018.jpg",
+"kind": "open",
+"title": "رسالة البطل الحقيقي",
+"task": "اكتب شعارك الخاص في 30 ثانية",
+"pts": 20,
+"back": 3,
+"sec": 30,
+"num": "message-8"
+},
+{
+"id": "challenge-speed-1",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1020.jpg",
+"kind": "open",
+"title": "تحدي السرعة",
+"task": "اذكر 3 أشياء تعبّر عن احترام العلم",
+"pts": 10,
+"back": 1,
+"sec": 30,
+"num": "speed-1"
+},
+{
+"id": "challenge-speed-2",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1028.jpg",
+"kind": "open",
+"title": "تحدي السرعة",
+"task": "قل جملة تعبّر عن حبك لمصر",
+"pts": 10,
+"back": 1,
+"sec": 15,
+"num": "speed-2"
+},
+{
+"id": "challenge-speed-3",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1021.jpg",
+"kind": "open",
+"title": "تحدي السرعة",
+"task": "اذكر موقفًا نحترم فيه العلم",
+"pts": 10,
+"back": 1,
+"sec": 20,
+"num": "speed-3"
+},
+{
+"id": "challenge-speed-4",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1022.jpg",
+"kind": "open",
+"title": "تحدي السرعة",
+"task": "ماذا تفعل إذا رأيت شخصًا يهين العلم؟",
+"pts": 10,
+"back": 1,
+"sec": 20,
+"num": "speed-4"
+},
+{
+"id": "challenge-tech-6",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1016.jpg",
+"kind": "open",
+"title": "التكنولوجيا: بطل أم خطر؟",
+"task": "مهمة: اقترح فكرة فيديو قصير تعرّف فيه الناس على مصر",
+"pts": 20,
+"back": 1,
+"sec": 60,
+"num": "tech-6"
+},
+{
+"id": "challenge-think-1",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1004.jpg",
+"kind": "open",
+"title": "تحدي التفكير",
+"task": "لماذا يجب علينا احترام العلم؟",
+"pts": 15,
+"back": 1,
+"sec": 45,
+"num": "think-1"
+},
+{
+"id": "challenge-think-3",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1005.jpg",
+"kind": "open",
+"title": "تحدي التفكير",
+"task": "كيف تعبّر عن حبك لمصر بدون كلام؟",
+"pts": 15,
+"back": 1,
+"sec": 45,
+"num": "think-3"
+},
+{
+"id": "challenge-treasure-3",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1013.jpg",
+"kind": "mcq",
+"title": "كنوز لا تختفي (لغز)",
+"task": "ما الشيء الذي لا يستطيع أحد بناءه مثل المصري القديم؟",
+"pts": 20,
+"back": 1,
+"sec": 0,
+"o": [
+"الأهرامات",
+"ناطحات السحاب",
+"السفن الحديثة",
+"القطارات"
+],
+"swap": true,
+"num": "treasure-3"
+},
+{
+"id": "challenge-who-1",
+"cat": "challenge",
+"img": "assets/cards/final/challenge/challenge-1011.jpg",
+"kind": "open",
+"title": "من أنت؟ (اكتشف هويتك)",
+"task": "اكتب في 5 ثوانٍ: كلمة واحدة تعبّر عن مصر بالنسبة لك!",
+"pts": 20,
+"back": 1,
+"sec": 5,
+"swap": true,
+"num": "who-1"
+}
+];
+
+
+==========================================================================================
+FILE: game-work/js/cardui.js
+==========================================================================================
+
+/* ============================================================
+   cardui.js — سحب الكروت المقلوبة، عرض الكارت الأصلي، الأسئلة والتحديات
+   play(ev, player) تُرجع وعدًا بنتيجة: { points, move, swap, correct }
+   ============================================================ */
+window.NIG = window.NIG || {};
+
+NIG.CardUI = (function () {
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const esc = s => String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+  const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+  const ALL = ['info', 'flag', 'values', 'history', 'geography', 'figures', 'pharaohs', 'culture', 'battles'];
+  const POOL = {
+    situation: ['values'], history: ['history'], geography: ['geography'],
+    figures: ['figures', 'pharaohs'], culture: ['culture'], battles: ['battles'],
+    info: ['info'], flag: ['flag'], challenge: ['challenge'],
+    quiz: ALL, question: ALL
+  };
+  const MIXED = { quiz: 1, question: 1 };
+  const PENALTY = { 'belong-2': 5, 'message-8': 3, 'hero-7': 2 };   // كما هو مكتوب على الكروت
+  const LETTERS = ['أ', 'ب', 'ج', 'د'];
+
+  /* ---------- اختيار الكروت (بدون تكرار داخل المباراة) ---------- */
+  function candidates(type) {
+    const S = NIG.Game.get();
+    S.used = S.used || {};
+    const key = MIXED[type] ? 'mixed' : type;
+    const all = NIG.CARDS.filter(c => POOL[type].includes(c.cat));
+    let used = S.used[key] || [];
+    let free = all.filter(c => !used.includes(c.id));
+    if (!free.length) { used = []; S.used[key] = used; free = all; }
+    return { free, key };
+  }
+  function markUsed(key, id) {
+    const S = NIG.Game.get();
+    (S.used[key] = S.used[key] || []).push(id);
+    NIG.Game.save();
+  }
+
+  function backOf(card) {
+    const b = card.cat === 'pharaohs' ? 'figures' : card.cat;
+    return NIG.BACKS[b];
+  }
+
+  /* ---------- أدوات الواجهة ---------- */
+  function layer(html) { $('card-body').innerHTML = html; $('card-layer').classList.remove('hidden'); $('card-layer').scrollTop = 0; }
+  function closeLayer() { $('card-layer').classList.add('hidden'); $('card-body').innerHTML = ''; }
+  function waitClick(sel) {
+    return new Promise(res => { const b = document.querySelector(sel); b.onclick = () => res(); });
+  }
+  const head = (t, sub) => `<div class="cl-head"><b>${esc(t)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div>`;
+
+  /* ---------- 1) اختيار كارت مقلوب ---------- */
+  async function pickCard(type, who) {
+    const { free, key } = candidates(type);
+    const n = Math.min(NIG.RULES.cardChoices || 6, free.length);
+    const slots = shuffle(free).slice(0, n);
+    const mixed = !!MIXED[type];
+    const label = NIG.TYPES[type].label;
+    const tiles = slots.map((c, i) => `
+      <button class="fc" data-i="${i}" aria-label="كارت ${i + 1}">
+        <div class="fci">
+          <div class="fcb">${mixed ? '<span class="qmark">؟</span>' : `<img src="${backOf(c)}" alt="ظهر الكارت" draggable="false">`}</div>
+          <div class="fcf"><img src="${c.img}" alt="" draggable="false"></div>
+        </div></button>`).join('');
+    layer(`${head('محطة ' + label, who)}
+      <p class="cl-hint">اختاري كارتًا واحدًا لتكتشفي ما بداخله 👇</p>
+      <div class="fc-grid n${n}">${tiles}</div>`);
+    const idx = await new Promise(res => {
+      document.querySelectorAll('.fc').forEach(b => b.onclick = () => res(+b.dataset.i));
+    });
+    document.querySelectorAll('.fc').forEach(b => { b.disabled = true; if (+b.dataset.i !== idx) b.classList.add('fade'); });
+    if (NIG.FX) NIG.FX.sfx('flip');
+    document.querySelector(`.fc[data-i="${idx}"]`).classList.add('on');
+    const card = slots[idx];
+    markUsed(key, card.id);
+    await sleep(1100);
+    return card;
+  }
+
+  /* ---------- 2) عرض الكارت الأصلي ---------- */
+  async function revealCard(card, btnText, label) {
+    layer(`${head(label, '')}
+      <div class="reveal"><img class="big-card pop" src="${card.img}" alt="الكارت"></div>
+      <div class="cl-actions"><button id="cl-go" class="btn primary">${btnText}</button></div>`);
+    await waitClick('#cl-go');
+  }
+
+  /* ---------- 3) سؤال اختيار من متعدد ---------- */
+  function askMCQ(card, qtext, options, pts, opts) {
+    return new Promise(res => {
+      const right = options[0];
+      const list = shuffle(options);
+      layer(`
+        <div class="qv">
+          <button class="qthumb-btn" id="q-zoom" title="تكبير الكارت"><img class="qthumb" src="${card.img}" alt="الكارت"></button>
+          <div class="qbox">
+            <div class="q-label">${esc(opts.label || 'السؤال')}</div>
+            <p class="qtext">${esc(qtext)}</p>
+            <div class="opts">${list.map((t, i) => `<button class="opt" data-t="${esc(t)}"><i>${LETTERS[i]}</i><span>${esc(t)}</span></button>`).join('')}</div>
+            <div id="q-fb" class="fb hidden"></div>
+            <div class="cl-actions"><button id="q-next" class="btn primary hidden">متابعة ◀</button></div>
+          </div>
+        </div>`);
+      $('q-zoom').onclick = () => {
+        const z = document.createElement('div'); z.className = 'zoom-view';
+        z.innerHTML = `<img src="${card.img}" alt="">`; z.onclick = () => z.remove(); $('card-body').appendChild(z);
+      };
+      let done = false;
+      document.querySelectorAll('.opt').forEach(b => b.onclick = () => {
+        if (done) return; done = true;
+        const ok = b.dataset.t === right;
+        document.querySelectorAll('.opt').forEach(x => {
+          x.disabled = true;
+          if (x.dataset.t === right) x.classList.add('right');
+        });
+        if (!ok) b.classList.add('wrong');
+        if (NIG.FX) NIG.FX.feedback(ok);
+        const fb = $('q-fb'); fb.classList.remove('hidden'); fb.classList.add(ok ? 'good' : 'bad');
+        fb.innerHTML = ok
+          ? `<b>✔ إجابة صحيحة! +${pts} نقطة</b>${opts.okNote ? `<small>${esc(opts.okNote)}</small>` : ''}`
+          : `<b>✘ إجابة غير صحيحة</b><small>الإجابة الصحيحة: ${esc(right)}${opts.badNote ? ' — ' + esc(opts.badNote) : ''}</small>`;
+        const nx = $('q-next'); nx.classList.remove('hidden'); nx.onclick = () => res(ok);
+        nx.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
+  }
+
+  /* ---------- 4) تحدٍّ مفتوح (نشاط) ---------- */
+  function openChallenge(card, penalty, swapText) {
+    return new Promise(res => {
+      layer(`
+        <div class="qv">
+          <button class="qthumb-btn" id="q-zoom"><img class="qthumb" src="${card.img}" alt="الكارت"></button>
+          <div class="qbox">
+            <div class="q-label">${esc(card.title)}</div>
+            <p class="qtext">${esc(card.task)}</p>
+            ${card.draw ? '<button id="draw-open" class="btn ghost draw-open">🎨 افتح لوح الرسم</button>' : ''}
+            ${card.sec ? `<div class="timer"><span id="tm">${card.sec}</span><small>ثانية</small><button id="tm-go" class="btn ghost">ابدأ المؤقت ⏱</button></div>` : ''}
+            <p class="soft">بعد تنفيذ التحدي اختاروا النتيجة (يقرّرها الحَكَم: المعلمة أو الفريق المنافس):</p>
+            <div class="cl-actions two">
+              <button id="ch-ok" class="btn primary">✔ أنجزنا التحدي (+${card.pts})</button>
+              <button id="ch-no" class="btn danger">✘ لم ننجز (${swapText || (penalty === 1 ? 'ارجع خطوة' : 'ارجع ' + penalty + ' خطوات')})</button>
+            </div>
+          </div>
+        </div>`);
+      $('q-zoom').onclick = () => {
+        const z = document.createElement('div'); z.className = 'zoom-view';
+        z.innerHTML = `<img src="${card.img}" alt="">`; z.onclick = () => z.remove(); $('card-body').appendChild(z);
+      };
+      const dro = $('draw-open'); if (dro) dro.onclick = () => NIG.Draw.open(card.title);
+      let timer = null;
+      const stop = () => { if (timer) clearInterval(timer); };
+      const tg = $('tm-go');
+      if (tg) tg.onclick = () => {
+        stop(); let t = card.sec; $('tm').textContent = t; tg.disabled = true;
+        timer = setInterval(() => {
+          t--; const el = $('tm'); if (!el) return stop();
+          el.textContent = t; if (t <= 5) el.classList.add('low');
+          if (t <= 0) { stop(); el.textContent = '⏰'; tg.disabled = false; tg.textContent = 'إعادة المؤقت'; }
+        }, 1000);
+      };
+      $('ch-ok').onclick = () => { stop(); res(true); };
+      $('ch-no').onclick = () => { stop(); res(false); };
+    });
+  }
+
+  /* ---------- نتيجة قصيرة بعد التحدي ---------- */
+  async function toast(html) {
+    layer(`<div class="result-box">${html}<div class="cl-actions"><button id="cl-go" class="btn primary">متابعة ◀</button></div></div>`);
+    if (NIG.FX && /🌟|💪/.test(html)) NIG.FX.feedback(/🌟/.test(html));
+    await waitClick('#cl-go');
+  }
+
+  /* ---------- المسار الكامل ---------- */
+  async function play(ev, player) {
+    try { return await playInner(ev, player); }
+    finally { closeLayer(); }          // دائمًا نُغلق طبقة الكروت ليظهر اللوح
+  }
+
+  async function playInner(ev, player) {
+    const S = NIG.Game.get();
+    const type = ev.type;
+    const who = (S.mode === 'team' && player.members > 1) ? `${player.name} — العضو ${player.member + 1}` : player.name;
+    const label = 'محطة ' + NIG.TYPES[type].label;
+    const card = await pickCard(type, who);
+    let result = { points: 0, move: 0, swap: false, correct: null };
+
+    if (card.cat === 'challenge') {
+      const penalty = PENALTY[card.num] || 1;
+      let ok;
+      if (card.kind === 'mcq') {
+        await revealCard(card, 'ابدأ التحدي ◀', label);
+        ok = await askMCQ(card, card.task, card.o, card.pts, { label: card.title });
+      } else {
+        await revealCard(card, 'ابدأ التحدي ◀', label);
+        const team = S.mode === 'team' && player.members > 1;
+        ok = await openChallenge(card, penalty, card.swap ? (team ? 'بدّلوا العضو' : 'ارجع خطوة') : null);
+      }
+      result.correct = ok;
+      if (ok) result.points = card.pts;
+      else if (card.swap && S.mode === 'team' && player.members > 1) result.swap = true;
+      else result.move = -(card.swap ? 1 : penalty);
+      if (card.kind !== 'mcq') {
+        await toast(ok
+          ? `<div class="big">🌟</div><h3>أحسنتم! +${card.pts} نقطة</h3>`
+          : `<div class="big">💪</div><h3>حاولوا في المرة القادمة</h3><p class="soft">${result.swap ? 'يُبدَّل العضو الذي يلعب.' : 'تعودون ' + (-result.move === 1 ? 'خطوة' : (-result.move) + ' خطوات') + ' للخلف.'}</p>`);
+      }
+      return result;
+    }
+
+    // كروت المعلومات: اقرأ الكارت ثم أجب
+    await revealCard(card, 'اقرأت الكارت — إلى السؤال ◀', label);
+    const pts = NIG.RULES.pointsCorrect || 10;
+    const ok = await askMCQ(card, card.q, card.o, pts, { label: 'السؤال' });
+    result.correct = ok;
+    if (ok) { result.points = pts; result.move = NIG.RULES.stepOnCorrect || 0; }
+    else { result.move = -(NIG.RULES.stepOnWrong || 0); }
+    return result;
+  }
+
+  function end() { closeLayer(); }
+
+  return { play, end, _closeLayer: closeLayer };
+})();
+
+
+==========================================================================================
+FILE: game-work/js/ui.js
+==========================================================================================
+
+/* ============================================================
+   ui.js — الشاشات والنرد وحركة القطع والاحتفال
+   ============================================================ */
+(function () {
+  const G = NIG.Game;
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  const START_POS = { x: 735, y: 837 };      // مكان القطع قبل البداية
+  let setupMode = 'solo';
+  let setupCount = 2;
+  let busy = false;
+  let zoomIdx = 0;
+  const ZOOMS = [100, 150, 200, 260];
+
+  /* ---------------- الشاشات ---------------- */
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id));
+    window.scrollTo(0, 0);
+  }
+
+  /* ---------------- نافذة عامة ---------------- */
+  function modal(html, actions) {
+    return new Promise(resolve => {
+      $('modal-body').innerHTML = html;
+      const box = $('modal-actions'); box.innerHTML = '';
+      actions.forEach(a => {
+        const b = document.createElement('button');
+        b.className = 'btn ' + (a.cls || 'primary'); b.textContent = a.text;
+        b.onclick = () => { $('modal').classList.add('hidden'); resolve(a.value); };
+        box.appendChild(b);
+      });
+      $('modal').classList.remove('hidden');
+    });
+  }
+
+  /* ---------------- إعداد اللاعبين ---------------- */
+  function renderSetup() {
+    const team = setupMode === 'team';
+    $('setup-title').textContent = team ? 'إعداد الفرق' : 'إعداد الطلاب';
+    const box = $('setup-fields'); box.innerHTML = '';
+    for (let i = 0; i < setupCount; i++) {
+      const c = NIG.COLORS[i];
+      const row = document.createElement('div'); row.className = 'field';
+      row.innerHTML =
+        `<label>${team ? 'اسم الفريق' : 'اسم الطالب'} ${i + 1}</label>` +
+        `<input type="text" maxlength="24" id="f-name-${i}" placeholder="${team ? 'مثال: فريق النيل' : 'اكتب الاسم'}">` +
+        (team ? `<label>عدد الأعضاء</label><input type="number" min="1" max="12" value="4" id="f-mem-${i}">` : '') +
+        `<label>اللون</label><div class="swatches" id="f-col-${i}" data-val="${c.id}"></div>`;
+      box.appendChild(row);
+      const sw = row.querySelector('.swatches');
+      NIG.COLORS.forEach(col => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'sw' + (col.id === c.id ? ' on' : '');
+        b.style.background = col.hex; b.title = col.name;
+        b.onclick = () => { sw.dataset.val = col.id; sw.querySelectorAll('.sw').forEach(x => x.classList.remove('on')); b.classList.add('on'); };
+        sw.appendChild(b);
+      });
+    }
+  }
+
+  function startFromSetup() {
+    const entries = [];
+    const used = new Set();
+    for (let i = 0; i < setupCount; i++) {
+      const colId = $('f-col-' + i).dataset.val;
+      if (used.has(colId)) { alert('اختاري لونًا مختلفًا لكل ' + (setupMode === 'team' ? 'فريق' : 'طالب')); return; }
+      used.add(colId);
+      const col = NIG.COLORS.find(c => c.id === colId);
+      let name = $('f-name-' + i).value.trim() || ((setupMode === 'team' ? 'الفريق ' : 'الطالب ') + (i + 1));
+      entries.push({
+        name, color: col.hex,
+        members: setupMode === 'team' ? Math.max(1, Math.min(12, parseInt($('f-mem-' + i).value) || 1)) : 1
+      });
+    }
+    G.create(setupMode, entries);
+    openGame();
+  }
+
+  /* ---------------- اللوحة والقطع ---------------- */
+  const pct = (x, y) => ({ l: (x / NIG.BOARD.w * 100), t: (y / NIG.BOARD.h * 100) });
+
+  function pawnSVG(color) {
+    return `<svg viewBox="0 0 40 56" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="20" cy="52" rx="15" ry="4" fill="rgba(0,0,0,.35)"/>
+      <path d="M20 14 C10 24 6 40 4 48 L36 48 C34 40 30 24 20 14Z" fill="${color}" stroke="#fff" stroke-width="2.5"/>
+      <circle cx="20" cy="11" r="9" fill="${color}" stroke="#fff" stroke-width="2.5"/>
+      <circle cx="17" cy="8" r="2.6" fill="rgba(255,255,255,.55)"/></svg>`;
+  }
+
+  function slotOffset(idx, total) {
+    if (total <= 1) return { dx: 0, dy: 0 };
+    const a = (idx / total) * Math.PI * 2 - Math.PI / 2;
+    return { dx: Math.cos(a) * 12, dy: Math.sin(a) * 8 };
+  }
+
+  function stationXY(pos) {
+    if (pos <= 0) return START_POS;
+    const s = G.byNum(pos); return s || START_POS;
+  }
+
+  function placeToken(p, instant) {
+    const el = document.querySelector(`.token[data-id="${p.id}"]`);
+    if (!el) return;
+    const st = stationXY(p.pos);
+    const sameTile = G.get().players.filter(q => q.pos === p.pos);
+    const o = slotOffset(sameTile.indexOf(p), sameTile.length);
+    const c = pct(st.x + o.dx, st.y + o.dy);
+    if (instant) el.style.transition = 'none';
+    el.style.left = c.l + '%'; el.style.top = c.t + '%';
+    if (instant) { void el.offsetWidth; el.style.transition = ''; }
+  }
+
+  function refreshTokens(instant) {
+    G.get().players.forEach(p => placeToken(p, instant));
+  }
+
+  function buildTokens() {
+    const box = $('tokens'); box.innerHTML = '';
+    G.get().players.forEach(p => {
+      const d = document.createElement('div');
+      d.className = 'token'; d.dataset.id = p.id;
+      d.innerHTML = pawnSVG(p.color);
+      d.title = p.name;
+      box.appendChild(d);
+    });
+    refreshTokens(true);
+  }
+
+  function renderScoreboard() {
+    const S = G.get();
+    $('scoreboard').innerHTML = S.players.map((p, i) =>
+      `<div class="chip ${i === S.turn ? 'now' : ''}" style="--c:${p.color}">
+         <i class="dot"></i><b>${esc(p.name)}</b>
+         <span>المحطة ${p.pos <= 0 ? 'البداية' : (p.pos >= G.FINISH ? 'النهاية' : p.pos)}</span>
+         <em>⭐ ${p.score}</em></div>`).join('');
+  }
+
+  function renderTurn() {
+    const S = G.get(), p = G.current();
+    const who = (S.mode === 'team' && p.members > 1) ? ` — العضو ${p.member + 1}` : '';
+    $('turn-banner').innerHTML = `<i class="dot" style="background:${p.color}"></i> دور: <b>${esc(p.name)}</b>${who}`;
+    renderScoreboard();
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
+  function say(t) { $('msg').textContent = t; }
+
+  function applyZoom() {
+    $('board').style.width = ZOOMS[zoomIdx] + '%';
+    focusCurrent(false);
+  }
+  function focusCurrent(smooth) {
+    const p = G.current(); if (!p) return;
+    const sc = $('board-scroll'), b = $('board');
+    const st = stationXY(p.pos);
+    const x = st.x / NIG.BOARD.w * b.clientWidth;
+    const y = st.y / NIG.BOARD.h * b.clientHeight;
+    sc.scrollTo({ left: x - sc.clientWidth / 2, top: y - sc.clientHeight / 2, behavior: smooth ? 'smooth' : 'auto' });
+  }
+
+  /* ---------------- النرد ---------------- */
+  const FACE_ROT = { 1: [0, 0], 6: [0, 180], 2: [0, -90], 5: [0, 90], 3: [-90, 0], 4: [90, 0] };
+  let spinBase = 0;
+
+  function buildDice() {
+    const cube = $('cube'); cube.innerHTML = '';
+    const pips = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
+    const place = { 1: 'rotateY(0deg)', 6: 'rotateY(180deg)', 2: 'rotateY(90deg)', 5: 'rotateY(-90deg)', 3: 'rotateX(90deg)', 4: 'rotateX(-90deg)' };
+    for (let f = 1; f <= 6; f++) {
+      const face = document.createElement('div');
+      face.className = 'face'; face.style.transform = place[f] + ' translateZ(var(--half))';
+      for (let i = 0; i < 9; i++) {
+        const c = document.createElement('i');
+        if (pips[f].includes(i)) c.className = 'pip';
+        face.appendChild(c);
+      }
+      cube.appendChild(face);
+    }
+    showFace(1, true);
+  }
+  function showFace(n, instant) {
+    const cube = $('cube'); const [rx, ry] = FACE_ROT[n];
+    spinBase += 720;
+    cube.style.transition = instant ? 'none' : 'transform 1s cubic-bezier(.2,.8,.2,1)';
+    cube.style.transform = `rotateX(${rx + (instant ? 0 : spinBase)}deg) rotateY(${ry + (instant ? 0 : spinBase)}deg)`;
+  }
+
+  async function onRoll() {
+    if (NIG.FX) NIG.FX.sfx('dice');
+    if (busy || G.get().over) return;
+    busy = true; $('dice').classList.add('off');
+    const p = G.current();
+    const n = G.roll();
+    say(`${p.name} يرمي النرد…`);
+    showFace(n, false);
+    await sleep(1050);
+    say(`خرج الرقم ${n}`);
+    await sleep(350);
+
+    await walk(p, Math.min(G.FINISH, p.pos + n));
+    await resolveLanding(p);
+  }
+
+  /* تحريك القطعة محطة بمحطة */
+  async function walk(p, target) {
+    const steps = G.path(p.pos, target);
+    for (const n of steps) {
+      G.moveTo(p, n);
+      placeToken(p);
+      const el = document.querySelector(`.token[data-id="${p.id}"]`);
+      el.classList.add('hop'); setTimeout(() => el.classList.remove('hop'), 260);
+      renderScoreboard(); focusCurrent(true);
+      say(`المحطة ${n}`); if (NIG.FX) NIG.FX.sfx('step');
+      await sleep(300);
+    }
+    refreshTokens();
+  }
+
+  async function slideTo(p, target) {
+    G.moveTo(p, target);
+    placeToken(p); renderScoreboard(); focusCurrent(true);
+    await sleep(900);
+    refreshTokens();
+  }
+
+  async function resolveLanding(p) {
+    const ev = G.landing(p);
+    switch (ev.kind) {
+      case 'finish': return win(p);
+      case 'ladder':
+        if (NIG.FX) NIG.FX.sfx('ladder');
+        say(ev.up ? '🪜 سلم! اطلع إلى المحطة ' + ev.to : '🪜 أنزل السلم إلى المحطة ' + ev.to);
+        await sleep(700);
+        await slideTo(p, ev.to);
+        break;
+      case 'forward':
+        say(`👏 أحسنت! تقدّم ${ev.steps === 1 ? 'خطوة' : 'خطوتين'}`);
+        await sleep(600);
+        await walk(p, Math.min(G.FINISH, p.pos + ev.steps));
+        break;
+      case 'back':
+        say(`↩ ارجع ${ev.steps === 1 ? 'خطوة' : 'خطوتين'}`);
+        await sleep(600);
+        await walk(p, Math.max(1, p.pos - ev.steps));
+        break;
+      case 'swap':
+        await modal(`<div class="big">🔄</div><h3>محطة تبديل</h3><p>${G.get().mode === 'team' ? 'بدّلوا العضو الذي يلعب في الفريق.' : 'لا يوجد أعضاء في اللعب الفردي — تابعي.'}</p>`,
+          [{ text: 'تابع', value: 1 }]);
+        if (G.get().mode === 'team') G.rotateMember(p);
+        break;
+      case 'card': {
+        let r = {};
+        if (NIG.CardUI) r = await NIG.CardUI.play(ev, p); else await cardPlaceholder(ev);
+        await applyCardResult(p, r);
+        break;
+      }
+    }
+    if (G.hasWon(p)) return win(p);
+    endTurn();
+  }
+
+  /* تطبيق نتيجة الكارت: نقاط + حركة + تبديل عضو */
+  async function applyCardResult(p, r) {
+    if (r.points) { p.score += r.points; G.save(); renderScoreboard(); }
+    if (r.swap) { G.rotateMember(p); renderTurn(); }
+    if (r.move) {
+      const target = Math.max(1, Math.min(G.FINISH, p.pos + r.move));
+      if (target !== p.pos) {
+        say(r.move > 0 ? `👏 تقدّم ${r.move === 1 ? 'خطوة' : r.move + ' خطوات'}` : `↩ ارجع ${r.move === -1 ? 'خطوة' : (-r.move) + ' خطوات'}`);
+        await sleep(500);
+        await walk(p, target);
+      }
+    }
+  }
+
+  /* احتياطي إن لم يُحمَّل ملف الكروت */
+  async function cardPlaceholder(ev) {
+    const t = NIG.TYPES[ev.type].label;
+    await modal(
+      `<div class="big">🃏</div><h3>محطة ${esc(t)} — رقم ${ev.station.n}</h3>
+       <p class="soft">هنا ستظهر البطاقة الأصلية مع السؤال والاختيارات (المرحلة الرابعة).</p>`,
+      [{ text: 'تابع', value: 1 }]);
+  }
+
+  function endTurn() {
+    const p = G.nextTurn();
+    renderTurn(); focusCurrent(true);
+    say(`دور ${p.name} — اضغط على النرد`);
+    busy = false; $('dice').classList.remove('off');
+  }
+
+  /* ---------------- الفوز ---------------- */
+  function win(p) {
+    if (NIG.FX) { NIG.FX.sfx('win'); NIG.FX.speak('مبروك يا بطل! أنت سفير الهوية الوطنية'); }
+    G.finish();
+    $('win-name').textContent = p.name;
+    $('win-scores').innerHTML = G.get().players
+      .slice().sort((a, b) => b.score - a.score)
+      .map(q => `<span style="--c:${q.color}"><i class="dot"></i>${esc(q.name)} ⭐ ${q.score}</span>`).join('');
+    show('screen-win'); startConfetti();
+    G.clearSave();
+    busy = false;
+  }
+
+  function startConfetti() {
+    const cv = $('confetti'), ctx = cv.getContext('2d');
+    const fit = () => { cv.width = innerWidth; cv.height = innerHeight; }; fit();
+    const colors = ['#d62828', '#ffffff', '#111111', '#d99a06', '#15803d'];
+    const bits = Array.from({ length: 150 }, () => ({
+      x: Math.random() * cv.width, y: -Math.random() * cv.height,
+      s: 6 + Math.random() * 8, v: 2 + Math.random() * 3, r: Math.random() * 6,
+      c: colors[(Math.random() * colors.length) | 0]
+    }));
+    let alive = true; const stop = Date.now() + 9000;
+    (function loop() {
+      if (!alive) return;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      bits.forEach(b => {
+        b.y += b.v; b.r += .05; b.x += Math.sin(b.r) * 1.2;
+        if (b.y > cv.height) { b.y = -10; b.x = Math.random() * cv.width; }
+        ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.r);
+        ctx.fillStyle = b.c; ctx.fillRect(-b.s / 2, -b.s / 3, b.s, b.s * .6); ctx.restore();
+      });
+      if (Date.now() < stop && $('screen-win').classList.contains('active')) requestAnimationFrame(loop);
+      else ctx.clearRect(0, 0, cv.width, cv.height);
+    })();
+  }
+
+  function saveCertificate() {
+    const name = $('win-name').textContent;
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = 1200; c.height = 1500;
+      const x = c.getContext('2d');
+      const g = x.createLinearGradient(0, 0, 0, 1500); g.addColorStop(0, '#fff8e1'); g.addColorStop(1, '#ffe9a8');
+      x.fillStyle = g; x.fillRect(0, 0, 1200, 1500);
+      x.strokeStyle = '#b8860b'; x.lineWidth = 14; x.strokeRect(30, 30, 1140, 1440);
+      x.drawImage(img, 200, 120, 800, 800);
+      x.textAlign = 'center'; x.direction = 'rtl';
+      x.fillStyle = '#0f2a5c'; x.font = 'bold 90px Cairo, Tahoma, sans-serif'; x.fillText(name, 600, 1040);
+      x.fillStyle = '#c1121f'; x.font = 'bold 64px Cairo, Tahoma, sans-serif';
+      x.fillText('مبروك.. أنت سفير الهوية الوطنية', 600, 1160);
+      x.fillStyle = '#0f2a5c'; x.font = '40px Cairo, Tahoma, sans-serif';
+      x.fillText('رحلة البحث عن الهوية الوطنية', 600, 1280);
+      try {
+        c.toBlob(b => {
+          if (!b) throw new Error('blob');
+          const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+          a.download = 'شهادة-سفير-الهوية-الوطنية.png'; a.click();
+        });
+      } catch (e) { alert('تعذّر الحفظ من ملف مفتوح مباشرة. شغّلي اللعبة من خادم محلي أو من الاستضافة.'); }
+    };
+    img.src = 'assets/badge/badge-600.png';
+  }
+
+  /* ---------------- فتح اللعبة ---------------- */
+  function openGame() {
+    show('screen-game');
+    buildTokens(); buildDice(); renderTurn();
+    zoomIdx = 0; applyZoom();
+    busy = false; $('dice').classList.remove('off');
+    say(`دور ${G.current().name} — اضغط على النرد`);
+  }
+
+  /* ---------------- ربط الأزرار ---------------- */
+  document.querySelectorAll('.mode:not([disabled])').forEach(b => b.onclick = () => {
+    setupMode = b.dataset.mode; setupCount = 2; renderSetup(); show('screen-setup');
+  });
+  $('btn-add').onclick = () => { if (setupCount < 4) { setupCount++; keepAndRender(); } };
+  $('btn-remove').onclick = () => { if (setupCount > 2) { setupCount--; keepAndRender(); } };
+  function keepAndRender() {
+    const old = [...document.querySelectorAll('#setup-fields input[type=text]')].map(i => i.value);
+    renderSetup();
+    old.forEach((v, i) => { const e = $('f-name-' + i); if (e) e.value = v; });
+  }
+  $('btn-back-start').onclick = () => show('screen-start');
+  $('btn-go').onclick = startFromSetup;
+  $('dice').onclick = onRoll;
+  $('zoom-in').onclick = () => { zoomIdx = Math.min(ZOOMS.length - 1, zoomIdx + 1); applyZoom(); };
+  $('zoom-out').onclick = () => { zoomIdx = Math.max(0, zoomIdx - 1); applyZoom(); };
+  $('btn-again').onclick = () => { show('screen-start'); refreshResume(); };
+  $('btn-save-cert').onclick = saveCertificate;
+
+  $('btn-menu').onclick = async () => {
+    if (busy) return;
+    const v = await modal('<h3>القائمة</h3>', [
+      { text: 'متابعة اللعب', value: 'go' },
+      { text: 'العودة للشاشة الرئيسية', value: 'home', cls: 'ghost' },
+      { text: 'إنهاء وبدء لعبة جديدة', value: 'reset', cls: 'danger' }
+    ]);
+    if (v === 'home') { show('screen-start'); refreshResume(); }
+    if (v === 'reset') { G.clearSave(); show('screen-start'); refreshResume(); }
+  };
+
+  function refreshResume() { $('btn-resume').classList.toggle('hidden', !G.hasSave()); }
+  $('btn-resume').onclick = () => { if (G.load()) openGame(); };
+  refreshResume();
+
+  addEventListener('resize', () => G.get() && refreshTokens(true));
+
+  /* للاختبار والتطوير */
+  NIG.debug = { openGame, onRoll };
+})();
+
+
+==========================================================================================
+FILE: game-work/js/game.js
+==========================================================================================
+
+/* ============================================================
+   game.js — منطق اللعبة (بدون أي واجهة): الأدوار، النرد، الحركة، السلالم
+   ============================================================ */
+window.NIG = window.NIG || {};
+
+NIG.Game = (function () {
+  const FINISH = NIG.STATIONS[NIG.STATIONS.length - 1].n; // 50
+  const SAVE_KEY = 'nig_save_v1';
+
+  let state = null;
+
+  const byNum = n => NIG.STATIONS.find(s => s.n === n);
+
+  function create(mode, entries) {
+    // entries: [{name, color, members}]
+    state = {
+      mode,
+      turn: 0,
+      round: 1,
+      over: false,
+      used: {},            // الكروت التي ظهرت في هذه المباراة (لمنع التكرار)
+      players: entries.map((e, i) => ({
+        id: i,
+        name: e.name,
+        color: e.color,
+        members: e.members || 1,
+        member: 0,           // رقم العضو الحالي داخل الفريق
+        pos: 0,              // 0 = قبل البداية
+        score: 0
+      })),
+      log: []
+    };
+    save();
+    return state;
+  }
+
+  const get = () => state;
+  const current = () => state.players[state.turn];
+
+  function roll() { return 1 + Math.floor(Math.random() * 6); }
+
+  /* يحسب مسار الخطوات (محطة بمحطة) من موضع إلى آخر */
+  function path(from, to) {
+    const p = [];
+    const dir = to >= from ? 1 : -1;
+    for (let n = from + dir; dir > 0 ? n <= to : n >= to; n += dir) p.push(n);
+    return p;
+  }
+
+  /* يطبق أثر المحطة بعد الوصول. يُرجع وصفًا للحدث */
+  function landing(player) {
+    const st = byNum(player.pos);
+    if (!st) return { kind: 'none' };
+    if (player.pos >= FINISH) return { kind: 'finish' };
+
+    if (NIG.RULES.useLadders) {
+      const l = NIG.LADDERS.find(l => l.from === st.n);
+      if (l) return { kind: 'ladder', from: l.from, to: l.to, up: l.to > l.from, station: st };
+    }
+    if (st.t === 'forward') return { kind: 'forward', steps: st.steps, station: st };
+    if (st.t === 'back')    return { kind: 'back', steps: st.steps, station: st };
+    if (st.t === 'swap')    return { kind: 'swap', station: st };
+    if (NIG.TYPES[st.t] && NIG.TYPES[st.t].card) return { kind: 'card', type: st.t, station: st };
+    return { kind: 'none', station: st };
+  }
+
+  /* تحريك اللاعب إلى موضع جديد (دون تطبيق أثر المحطة) */
+  function moveTo(player, n) {
+    player.pos = Math.max(0, Math.min(FINISH, n));
+    save();
+  }
+
+  function nextTurn() {
+    const p = current();
+    if (state.mode === 'team' && p.members > 1) p.member = (p.member + 1) % p.members;
+    state.turn = (state.turn + 1) % state.players.length;
+    if (state.turn === 0) state.round++;
+    save();
+    return current();
+  }
+
+  function rotateMember(player) {
+    if (player.members > 1) player.member = (player.member + 1) % player.members;
+    save();
+  }
+
+  /* الفائز: من وصل النهاية */
+  function hasWon(player) {
+    return NIG.RULES.exactFinish ? player.pos === FINISH : player.pos >= FINISH;
+  }
+
+  /* ---------- الحفظ المحلي (يعمل بدون إنترنت) ---------- */
+  function save() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) { /* تجاهل */ }
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return null;
+      const s = JSON.parse(raw);
+      if (!s || s.over || !Array.isArray(s.players)) return null;
+      state = s; return state;
+    } catch (e) { return null; }
+  }
+  function hasSave() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return false;
+      const s = JSON.parse(raw);
+      return !!(s && !s.over && s.players);
+    } catch (e) { return false; }
+  }
+  function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
+  function finish() { state.over = true; save(); }
+
+  return { FINISH, byNum, create, get, current, roll, path, landing, moveTo,
+           nextTurn, rotateMember, hasWon, load, hasSave, clearSave, finish, save };
+})();
+
+
+==========================================================================================
+FILE: game-work/js/data.js
+==========================================================================================
+
+/* ============================================================
+   data.js — بيانات اللوحة (المحطات والسلالم وألوان اللاعبين)
+   الإحداثيات (x,y) بالبكسل على صورة اللوحة الأصلية (921 × 966)
+   لتعديل مكان محطة: غيّري x و y فقط.
+   ============================================================ */
+window.NIG = window.NIG || {};
+
+NIG.BOARD = { w: 921, h: 966, image: 'assets/board/board-original.jpg' };
+
+/* أنواع المحطات */
+NIG.TYPES = {
+  info:      { label: 'معلومات',          card: true },
+  challenge: { label: 'تحدي',             card: true },
+  situation: { label: 'موقف',             card: true },
+  history:   { label: 'تاريخ مصر',        card: true },
+  geography: { label: 'جغرافيا مصر',      card: true },
+  figures:   { label: 'شخصيات وطنية',     card: true },
+  culture:   { label: 'الثقافة والفنون',  card: true },
+  battles:   { label: 'معارك',            card: true },
+  flag:      { label: 'علم مصر',          card: true },
+  quiz:      { label: 'كارت من اختيارك',  card: true },
+  question:  { label: 'سؤال',             card: true },
+  swap:      { label: 'تبديل',            card: false },
+  forward:   { label: 'تقدم',             card: false },
+  back:      { label: 'ارجع',             card: false },
+  start:     { label: 'البداية',          card: false },
+  finish:    { label: 'النهاية',          card: false }
+};
+
+/* المحطات: رقم، نوع، x، y، (اختياري) خطوات */
+NIG.STATIONS = [
+  { n: 1,  t: 'info',      x: 657, y: 837 },
+  { n: 2,  t: 'situation', x: 607, y: 837 },
+  { n: 3,  t: 'situation', x: 537, y: 837 },
+  { n: 4,  t: 'figures',   x: 475, y: 837 },
+  { n: 5,  t: 'info',      x: 415, y: 837 },
+  { n: 6,  t: 'situation', x: 355, y: 837 },
+  { n: 7,  t: 'flag',      x: 300, y: 837 },
+  { n: 8,  t: 'challenge', x: 250, y: 837 },
+  { n: 9,  t: 'situation', x: 197, y: 837 },
+  { n: 10, t: 'history',   x: 137, y: 837 },
+  { n: 11, t: 'swap',      x: 57,  y: 805 },
+  { n: 12, t: 'forward',   x: 95,  y: 670, steps: 2 },
+  { n: 13, t: 'geography', x: 182, y: 690 },
+  { n: 14, t: 'figures',   x: 257, y: 690 },
+  { n: 15, t: 'culture',   x: 335, y: 690 },
+  { n: 16, t: 'situation', x: 407, y: 690 },
+  { n: 17, t: 'geography', x: 485, y: 690 },
+  { n: 18, t: 'swap',      x: 555, y: 690 },
+  { n: 19, t: 'history',   x: 620, y: 690 },
+  { n: 20, t: 'battles',   x: 680, y: 690 },
+  { n: 21, t: 'challenge', x: 735, y: 640 },
+  { n: 22, t: 'culture',   x: 695, y: 555 },
+  { n: 23, t: 'back',      x: 600, y: 550, steps: 2 },
+  { n: 24, t: 'history',   x: 535, y: 550 },
+  { n: 25, t: 'quiz',      x: 447, y: 550 },
+  { n: 26, t: 'figures',   x: 370, y: 550 },
+  { n: 27, t: 'situation', x: 287, y: 550 },
+  { n: 28, t: 'culture',   x: 210, y: 550 },
+  { n: 29, t: 'challenge', x: 137, y: 550 },
+  { n: 30, t: 'geography', x: 55,  y: 530 },
+  { n: 31, t: 'swap',      x: 70,  y: 405 },
+  { n: 32, t: 'situation', x: 145, y: 415 },
+  { n: 33, t: 'history',   x: 220, y: 415 },
+  { n: 34, t: 'geography', x: 292, y: 415 },
+  { n: 35, t: 'challenge', x: 367, y: 415 },
+  { n: 36, t: 'question',  x: 415, y: 415 },
+  { n: 37, t: 'history',   x: 472, y: 415 },
+  { n: 38, t: 'situation', x: 545, y: 415 },
+  { n: 39, t: 'culture',   x: 612, y: 415 },
+  { n: 40, t: 'challenge', x: 695, y: 415 },
+  { n: 41, t: 'forward',   x: 740, y: 410, steps: 1 },
+  { n: 42, t: 'situation', x: 720, y: 280 },
+  { n: 43, t: 'culture',   x: 625, y: 265 },
+  { n: 44, t: 'situation', x: 537, y: 265 },
+  { n: 45, t: 'figures',   x: 465, y: 265 },
+  { n: 46, t: 'geography', x: 390, y: 265 },
+  { n: 47, t: 'challenge', x: 310, y: 265 },
+  { n: 48, t: 'situation', x: 232, y: 265 },
+  { n: 49, t: 'history',   x: 152, y: 265 },
+  { n: 50, t: 'finish',    x: 70,  y: 245 }   /* النهاية */
+];
+
+/* السلالم (من ← إلى).
+   confirmed:true  = مكتوب بوضوح على اللوحة (اطلع السلم / أنزل السلم)
+   confirmed:false = قرأتُها من رسم السلم فقط، تحتاج تأكيدك */
+NIG.LADDERS = [
+  { from: 3,  to: 19, confirmed: true  },  // اطلع السلم (حافظت على الكهرباء)
+  { from: 6,  to: 15, confirmed: false },  // اطلع السلم (حافظوا على المياه)
+  { from: 13, to: 28, confirmed: false },  // سلم بدون كتابة
+  { from: 37, to: 44, confirmed: true  },  // اطلع السلم (سهم أخضر)
+  { from: 38, to: 17, confirmed: false },  // أنزل السلم (نشرت إشاعة)
+  { from: 42, to: 40, confirmed: false },  // أنزل السلم (رميت زبالة)
+  { from: 48, to: 29, confirmed: false }   // أنزل السلم (انتقدت زميلك)
+];
+
+/* قواعد قابلة للتعديل */
+NIG.RULES = {
+  useLadders: true,        // تفعيل السلالم
+  exactFinish: false,      // false = يفوز بمجرد الوصول أو تجاوز النهاية
+  pointsCorrect: 10,       // نقاط الإجابة الصحيحة في كروت المعلومات
+  stepOnCorrect: 1,        // الإجابة الصحيحة: تقدّم خطوة (حسب اللوحة)
+  stepOnWrong: 1,          // الإجابة الخاطئة: ارجع خطوة (حسب اللوحة)
+  cardChoices: 6           // عدد الكروت المقلوبة المعروضة للاختيار
+};
+
+/* ألوان وقطع اللاعبين */
+NIG.COLORS = [
+  { id: 'red',    name: 'أحمر',    hex: '#d62828' },
+  { id: 'blue',   name: 'أزرق',    hex: '#1d4ed8' },
+  { id: 'green',  name: 'أخضر',    hex: '#15803d' },
+  { id: 'gold',   name: 'ذهبي',    hex: '#d99a06' },
+  { id: 'purple', name: 'بنفسجي',  hex: '#7e22ce' },
+  { id: 'black',  name: 'أسود',    hex: '#1f2937' }
+];
+
+
+==========================================================================================
+FILE: game-work/css/style.css
+==========================================================================================
+
+/* ============================================================
+   style.css — الألوان: أزرق ملكي + ذهبي + ألوان العلم المصري
+   ============================================================ */
+:root{
+  --navy:#0f2a5c; --navy2:#173a7d; --gold:#d99a06; --gold-l:#ffd75e;
+  --red:#c1121f; --green:#15803d; --cream:#fff6dc; --ink:#14213d;
+  --radius:18px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  font-family:'Cairo','Segoe UI',Tahoma,'Noto Naskh Arabic',sans-serif;
+  background:linear-gradient(180deg,#fdf1cf 0%,#f6dca0 100%) fixed;
+  color:var(--ink); direction:rtl;
+}
+.hidden{display:none!important}
+
+.screen{display:none;min-height:100dvh}
+.screen.active{display:block}
+
+/* ---------- البداية والإعداد ---------- */
+.hero{max-width:980px;margin:0 auto;padding:12px 12px 0}
+.hero-img{width:100%;display:block;border-radius:22px;border:4px solid var(--gold);box-shadow:0 8px 24px rgba(15,42,92,.25)}
+.start-card{
+  max-width:720px;margin:14px auto;padding:20px 18px 24px;background:#fff;border-radius:26px;
+  border:3px solid var(--gold);box-shadow:0 10px 30px rgba(15,42,92,.18);text-align:center;
+}
+h1{margin:4px 0;color:var(--navy);font-size:clamp(1.5rem,5vw,2.2rem);font-weight:900}
+.tag{margin:0 0 6px;color:var(--red);font-weight:700;font-size:1.15rem}
+.sub{color:var(--navy);margin:14px 0 8px}
+.modes{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin:10px 0 14px}
+.mode{
+  font:inherit;border:3px solid var(--navy2);background:linear-gradient(180deg,#fff,#eaf1ff);border-radius:20px;
+  padding:16px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px;align-items:center;
+  transition:transform .15s, box-shadow .15s;
+}
+.mode:hover,.mode:focus-visible{transform:translateY(-3px);box-shadow:0 8px 18px rgba(23,58,125,.3)}
+.mode .ico{font-size:2.4rem}
+.mode b{font-size:1.2rem;color:var(--navy)}
+.mode small{color:#52607a}
+.mode.disabled{opacity:.5;cursor:not-allowed;filter:grayscale(.6)}
+
+.btn{
+  font:inherit;font-weight:800;border:none;border-radius:999px;padding:12px 24px;cursor:pointer;font-size:1.05rem;
+  transition:transform .12s, filter .12s;
+}
+.btn:active{transform:scale(.96)}
+.btn.primary{background:linear-gradient(180deg,#2fae5a,var(--green));color:#fff;box-shadow:0 4px 0 #0e5a28}
+.btn.ghost{background:#fff;color:var(--navy);border:2px solid var(--navy2)}
+.btn.danger{background:var(--red);color:#fff}
+.row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+
+.field{text-align:right;background:#f5f8ff;border:2px solid #d5e0f7;border-radius:16px;padding:10px 12px;margin:10px 0}
+.field label{display:block;font-weight:700;color:var(--navy);margin:6px 0 3px;font-size:.95rem}
+.field input{
+  width:100%;font:inherit;padding:10px 12px;border-radius:12px;border:2px solid #b9c7e6;background:#fff;
+}
+.field input:focus{outline:3px solid var(--gold-l);border-color:var(--gold)}
+.swatches{display:flex;gap:10px;flex-wrap:wrap;padding:4px 0}
+.sw{width:38px;height:38px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #b9c7e6;cursor:pointer}
+.sw.on{box-shadow:0 0 0 4px var(--navy)}
+
+/* ---------- شاشة اللعب ---------- */
+#screen-game.active{display:flex;flex-direction:column;height:100dvh}
+.topbar{
+  display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--navy);color:#fff;
+  border-bottom:4px solid var(--gold);
+}
+.turn{flex:1;text-align:center;font-size:1.05rem}
+.turn b{color:var(--gold-l)}
+.icon-btn{
+  font:inherit;font-size:1.3rem;width:42px;height:42px;border-radius:12px;border:2px solid var(--gold);
+  background:var(--navy2);color:#fff;cursor:pointer
+}
+.zoom{display:flex;gap:6px}
+.dot{display:inline-block;width:14px;height:14px;border-radius:50%;background:var(--c,#999);border:2px solid #fff;vertical-align:middle}
+
+.scoreboard{display:flex;gap:8px;padding:6px 8px;overflow-x:auto;background:#fff7e0;border-bottom:2px solid #ecd48a}
+.chip{
+  flex:1 0 auto;display:flex;gap:6px;align-items:center;background:#fff;border:3px solid transparent;
+  border-radius:14px;padding:4px 10px;font-size:.85rem;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.08)
+}
+.chip.now{border-color:var(--c);background:#fffbea;transform:scale(1.02)}
+.chip span{color:#52607a} .chip em{font-style:normal;font-weight:800;color:var(--gold)}
+
+.board-scroll{flex:1;overflow:auto;background:#e9d9a6;touch-action:pan-x pan-y pinch-zoom;-webkit-overflow-scrolling:touch}
+.board{position:relative;width:100%;margin:0 auto;direction:ltr;transition:width .25s}
+.board-img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none}
+
+.token{
+  position:absolute;width:6.2%;aspect-ratio:40/56;transform:translate(-50%,-72%);
+  transition:left .28s ease, top .28s ease;pointer-events:none;
+  filter:drop-shadow(0 3px 3px rgba(0,0,0,.4));z-index:5
+}
+.token svg{width:100%;height:100%;display:block}
+.token.hop svg{animation:hop .26s ease}
+@keyframes hop{50%{transform:translateY(-35%)}}
+
+.dock{
+  display:flex;align-items:center;gap:12px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));
+  background:var(--navy);border-top:4px solid var(--gold);color:#fff
+}
+.msg{flex:1;font-weight:700;font-size:1.05rem;min-height:2.4em;display:flex;align-items:center}
+
+/* ---------- النرد ---------- */
+.dice{
+  --size:64px;--half:32px;background:none;border:none;padding:0;cursor:pointer;
+  width:var(--size);height:var(--size);perspective:420px;flex:none
+}
+.dice.off{opacity:.6;pointer-events:none}
+.cube{width:100%;height:100%;position:relative;transform-style:preserve-3d}
+.face{
+  position:absolute;inset:0;background:#fff;border:2px solid #cfd6e6;border-radius:12px;
+  display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);padding:9px;
+  backface-visibility:hidden;box-shadow:inset 0 0 8px rgba(0,0,0,.12)
+}
+.face i{display:block}
+.face .pip{background:radial-gradient(circle at 35% 35%,#ef4444,#9b0d1a);border-radius:50%;margin:2px}
+.dice:not(.off){border-radius:14px;animation:glow 1.6s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(255,215,94,.0)}50%{box-shadow:0 0 0 8px rgba(255,215,94,.55)}}
+
+/* ---------- النوافذ ---------- */
+.modal{position:fixed;inset:0;background:rgba(10,20,45,.6);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+.modal-box{
+  background:#fff;border:4px solid var(--gold);border-radius:24px;padding:20px;max-width:440px;width:100%;
+  text-align:center;animation:pop .25s ease
+}
+@keyframes pop{from{transform:scale(.85);opacity:0}}
+.modal-box h3{margin:6px 0;color:var(--navy);font-size:1.3rem}
+.big{font-size:3rem}
+.soft{color:#52607a}
+
+/* ---------- الفوز ---------- */
+.win{background:radial-gradient(circle at 50% 30%,#fff6c9,#f5c84a 70%);position:relative;overflow:hidden}
+.win.active{display:flex;align-items:center;justify-content:center}
+#confetti{position:absolute;inset:0;pointer-events:none;z-index:2}
+.win-box{position:relative;z-index:3;text-align:center;padding:16px;max-width:560px}
+.badge{width:min(78vw,380px);filter:drop-shadow(0 12px 18px rgba(0,0,0,.35));animation:pulse 2.2s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.05) rotate(-1.5deg)}}
+.win-box h2{font-size:clamp(1.8rem,7vw,2.8rem);margin:8px 0;color:var(--navy);font-weight:900}
+.congrats{font-size:1.3rem;font-weight:800;color:var(--red);margin:0 0 8px}
+.win-scores{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.win-scores span{background:#fff;border-radius:999px;padding:4px 12px;font-weight:700}
+
+@media (min-width:700px){
+  .dice{--size:80px;--half:40px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+
+/* ============ طبقة الكروت (المرحلة 4) ============ */
+.card-layer{position:fixed;inset:0;z-index:60;background:radial-gradient(circle at 50% 20%,#1c3f86,#0b1b3f 75%);overflow:auto;-webkit-overflow-scrolling:touch}
+.card-body{max-width:640px;margin:0 auto;padding:14px 14px calc(24px + env(safe-area-inset-bottom));color:#fff;min-height:100%}
+.cl-head{display:flex;flex-direction:column;align-items:center;gap:2px;margin:6px 0 8px;text-align:center}
+.cl-head b{font-size:1.35rem;color:var(--gold-l)}
+.cl-head span{font-size:.95rem;opacity:.9}
+.cl-hint{text-align:center;margin:4px 0 12px;font-weight:700}
+.cl-actions{display:flex;justify-content:center;margin-top:14px}
+.cl-actions.two{gap:10px;flex-wrap:wrap}
+
+.fc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.fc-grid.n1{grid-template-columns:minmax(0,200px);justify-content:center}
+.fc-grid.n2,.fc-grid.n4{grid-template-columns:repeat(2,1fr)}
+.fc{perspective:900px;background:none;border:0;padding:0;cursor:pointer;aspect-ratio:3/4;transition:opacity .4s,transform .2s}
+.fc:not(:disabled):hover,.fc:not(:disabled):focus-visible{transform:translateY(-4px) rotate(-1.5deg)}
+.fc.fade{opacity:.15}
+.fci{position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform .8s cubic-bezier(.3,.7,.2,1)}
+.fc.on .fci{transform:rotateY(180deg) scale(1.06)}
+.fcb,.fcf{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#fff;border:3px solid var(--gold);box-shadow:0 6px 16px rgba(0,0,0,.4)}
+.fcf{transform:rotateY(180deg)}
+.fcb img{width:100%;height:100%;object-fit:cover}
+.fcf img{width:100%;height:100%;object-fit:contain}
+.qmark{font-size:3.2rem;font-weight:900;color:#fff;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#173a7d,#0f2a5c)}
+
+.reveal{display:flex;justify-content:center}
+.big-card{max-width:100%;max-height:68vh;border-radius:14px;border:4px solid var(--gold);box-shadow:0 10px 30px rgba(0,0,0,.5);background:#fff}
+.pop{animation:cardpop .5s ease}
+@keyframes cardpop{from{transform:rotateY(90deg) scale(.8);opacity:0}}
+
+.qv{display:flex;flex-direction:column;gap:12px}
+.qthumb-btn{align-self:center;background:none;border:0;padding:0;cursor:zoom-in}
+.qthumb{max-height:30vh;max-width:70vw;border-radius:12px;border:3px solid var(--gold);background:#fff;display:block}
+.qbox{background:#fff;color:var(--ink);border-radius:20px;border:3px solid var(--gold);padding:14px}
+.q-label{font-weight:800;color:var(--red);font-size:.95rem}
+.qtext{font-size:1.2rem;font-weight:800;margin:6px 0 12px;line-height:1.6;color:var(--navy)}
+.opts{display:grid;gap:9px}
+.opt{font:inherit;display:flex;align-items:center;gap:10px;text-align:right;background:#f4f8ff;border:3px solid #c4d3f2;border-radius:14px;padding:10px 12px;cursor:pointer;font-size:1.05rem;font-weight:700;color:var(--ink)}
+.opt i{font-style:normal;flex:none;width:32px;height:32px;border-radius:50%;background:var(--navy2);color:#fff;display:flex;align-items:center;justify-content:center}
+.opt:not(:disabled):hover,.opt:not(:disabled):focus-visible{border-color:var(--gold);background:#fff9e0}
+.opt.right{background:#dcfce7;border-color:#16a34a}
+.opt.wrong{background:#fee2e2;border-color:#dc2626}
+.fb{margin-top:12px;border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.fb.good{background:#dcfce7;color:#14532d}.fb.bad{background:#fee2e2;color:#7f1d1d}
+.fb b{font-size:1.1rem}
+.zoom-view{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;padding:12px}
+.zoom-view img{max-width:100%;max-height:100%;border-radius:12px;background:#fff}
+.timer{display:flex;align-items:center;gap:8px;margin:6px 0 10px}
+.timer span{font-size:2.2rem;font-weight:900;color:var(--navy);min-width:2.2ch;text-align:center}
+.timer span.low{color:var(--red)}
+.result-box{background:#fff;color:var(--ink);border:4px solid var(--gold);border-radius:24px;padding:20px;text-align:center;margin-top:12vh}
+.result-box h3{margin:6px 0;color:var(--navy);font-size:1.4rem}
+.card-body .soft{color:#52607a;margin:4px 0}
+.card-body .btn.danger{background:var(--red);color:#fff}
+.card-body .big{font-size:3rem}
+
+/* ===== المرحلة 5: المؤثرات والولد ولوح الرسم ===== */
+.fx-toggle{position:fixed;top:62px;left:8px;z-index:95;height:38px;padding:0 12px;border-radius:999px;border:2px solid var(--gold);background:#fff;color:#0b1b3f;font-family:inherit;font-weight:900;font-size:.9rem;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer}
+.fx-boy{position:fixed;bottom:0;right:8px;z-index:90;width:150px;pointer-events:none;transform:translateY(120%);transition:transform .35s cubic-bezier(.2,1.4,.4,1)}
+.fx-boy.show{transform:translateY(0)}
+.fx-fig{width:110px;height:130px;margin:0 auto}
+.fx-boy.happy .fx-fig{animation:boyhop .5s ease 3}
+.fx-boy.sad .fx-fig{animation:boyshake .5s ease 2}
+@keyframes boyhop{50%{transform:translateY(-14px)}}
+@keyframes boyshake{25%{transform:rotate(-5deg)}75%{transform:rotate(5deg)}}
+.fx-bubble{background:#fff;color:#0b1b3f;border:3px solid var(--gold);border-radius:16px;padding:8px 10px;font-weight:900;font-size:.95rem;text-align:center;margin-bottom:4px;position:relative;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+.fx-roses{position:fixed;inset:0;z-index:92;pointer-events:none;overflow:hidden}
+.fx-roses i{position:absolute;top:-50px;font-style:normal;animation:rosefall linear forwards}
+@keyframes rosefall{to{transform:translateY(115vh) rotate(360deg)}}
+.dr-wrap{position:fixed;inset:0;z-index:80;background:#0b1b3f;display:flex;flex-direction:column;padding:8px;gap:6px}
+.dr-top{display:flex;justify-content:space-between;align-items:center;color:#fff;font-size:1.1rem}
+.dr-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#fff;border-radius:12px;padding:6px}
+.dr-colors{display:flex;gap:5px}
+.dr-c{width:30px;height:30px;border-radius:50%;border:3px solid #ccc;cursor:pointer}
+.dr-c.on{border-color:var(--gold);transform:scale(1.15)}
+.dr-b{border:2px solid #cbd5e1;background:#f8fafc;border-radius:10px;padding:5px 9px;font-family:inherit;font-weight:700;cursor:pointer}
+.dr-b.on{background:var(--gold);border-color:var(--gold)}
+.dr-size{display:flex;align-items:center;gap:4px;font-weight:700;color:#0b1b3f}
+.dr-canvas{flex:1;width:100%;background:#fff;border-radius:12px;touch-action:none;min-height:0;cursor:crosshair}
+.draw-open{margin:8px 0}
+
+.fx-flash{position:fixed;inset:0;z-index:91;pointer-events:none;animation:fxflash .7s ease-out forwards}
+.fx-flash.g{background:radial-gradient(circle,rgba(34,197,94,.35),transparent 70%)}
+.fx-flash.r{background:radial-gradient(circle,rgba(220,38,38,.35),transparent 70%)}
+@keyframes fxflash{from{opacity:1}to{opacity:0}}
+
+
+==========================================================================================
+FILE: game-work/index.html
+==========================================================================================
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>رحلة البحث عن الهوية الوطنية</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ========== شاشة البداية ========== -->
+<section id="screen-start" class="screen active">
+  <div class="hero">
+    <img src="assets/board/banner-top.jpg" alt="رحلة البحث عن الهوية الوطنية" class="hero-img">
+  </div>
+  <div class="start-card">
+    <h1>رحلة البحث عن الهوية الوطنية</h1>
+    <p class="tag">تعلّم .. تحدَّ .. انتمِ</p>
+
+    <h2 class="sub">اختاري نظام اللعب</h2>
+    <div class="modes">
+      <button class="mode" data-mode="solo">
+        <span class="ico">🧑‍🤝‍🧑</span>
+        <b>منافسة فردية</b>
+        <small>طالب ضد طالب على جهاز واحد</small>
+      </button>
+      <button class="mode" data-mode="team">
+        <span class="ico">👥</span>
+        <b>منافسة جماعية</b>
+        <small>فريق ضد فريق</small>
+      </button>
+      <button class="mode disabled" data-mode="remote" disabled>
+        <span class="ico">🌐</span>
+        <b>عن بُعد</b>
+        <small>قريبًا (المرحلة السادسة)</small>
+      </button>
+    </div>
+    <button id="btn-resume" class="btn ghost hidden">↩ متابعة المباراة السابقة</button>
+  </div>
+</section>
+
+<!-- ========== إعداد اللاعبين ========== -->
+<section id="screen-setup" class="screen">
+  <div class="start-card">
+    <h2 id="setup-title">إعداد المباراة</h2>
+    <div id="setup-fields"></div>
+    <div class="row">
+      <button id="btn-add" class="btn ghost">＋ إضافة</button>
+      <button id="btn-remove" class="btn ghost">－ حذف</button>
+    </div>
+    <div class="row">
+      <button id="btn-back-start" class="btn ghost">رجوع</button>
+      <button id="btn-go" class="btn primary">ابدأ الرحلة 🚀</button>
+    </div>
+  </div>
+</section>
+
+<!-- ========== اللعبة ========== -->
+<section id="screen-game" class="screen">
+  <header class="topbar">
+    <button id="btn-menu" class="icon-btn" title="القائمة">☰</button>
+    <div id="turn-banner" class="turn"></div>
+    <div class="zoom">
+      <button id="zoom-out" class="icon-btn" title="تصغير">－</button>
+      <button id="zoom-in" class="icon-btn" title="تكبير">＋</button>
+    </div>
+  </header>
+
+  <div id="scoreboard" class="scoreboard"></div>
+
+  <div id="board-scroll" class="board-scroll">
+    <div id="board" class="board">
+      <img src="assets/board/board-original.jpg" alt="لوحة اللعبة" class="board-img" draggable="false">
+      <div id="tokens"></div>
+    </div>
+  </div>
+
+  <footer class="dock">
+    <div id="msg" class="msg">اضغط على النرد لتبدأ!</div>
+    <button id="dice" class="dice" aria-label="ارمِ النرد">
+      <div class="cube" id="cube"></div>
+    </button>
+  </footer>
+</section>
+
+<!-- ========== نافذة عامة ========== -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div id="modal-body"></div>
+    <div id="modal-actions" class="row"></div>
+  </div>
+</div>
+
+<!-- ========== طبقة الكروت ========== -->
+<div id="card-layer" class="card-layer hidden"><div id="card-body" class="card-body"></div></div>
+
+<!-- ========== شاشة الفوز ========== -->
+<section id="screen-win" class="screen win">
+  <canvas id="confetti"></canvas>
+  <div class="win-box">
+    <img src="assets/badge/badge-600.png" alt="وسام سفير الهوية الوطنية" class="badge">
+    <h2 id="win-name"></h2>
+    <p class="congrats">مبروك.. أنت سفير الهوية الوطنية</p>
+    <div id="win-scores" class="win-scores"></div>
+    <div class="row">
+      <button id="btn-save-cert" class="btn ghost">💾 حفظ صورة التكريم</button>
+      <button id="btn-again" class="btn primary">لعبة جديدة</button>
+    </div>
+  </div>
+</section>
+
+<script src="js/data.js"></script>
+<script src="js/fx.js"></script>
+<script src="js/draw.js"></script>
+<script src="js/cards-data.js"></script>
+<script src="js/game.js"></script>
+<script src="js/cardui.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
+
